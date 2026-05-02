@@ -1,0 +1,44 @@
+{
+  "entities": {
+    "Withdrawal": {
+      "title": "Withdrawal Request",
+      "description": "Represents an advance request or a settlement.",
+      "type": "object",
+      "properties": {
+        "advanceId": { "type": "string" },
+        "employeeName": { "type": "string" },
+        "status": { "enum": ["pending", "approved", "rejected"] },
+        "clearanceStatus": { "enum": ["none", "partial", "cleared"] },
+        "totalAmount": { "type": "number" },
+        "actualSpend": { "type": "number" },
+        "balance": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "approvedAt": { "type": "string", "format": "date-time" },
+        "clearedAt": { "type": "string", "format": "date-time" },
+        "items": { "type": "array" },
+        "receipts": { "type": "array" }
+      },
+      "required": ["advanceId", "employeeName", "status", "totalAmount"]
+    },
+    "SystemConfig": {
+      "title": "System Configuration",
+      "description": "Global settings like admin PINs or employee lists.",
+      "type": "object",
+      "properties": {
+        "execPin": { "type": "string" },
+        "accPin": { "type": "string" },
+        "list": { "type": "array" }
+      }
+    }
+  },
+  "firestore": {
+    "/artifacts/advance-system-v3/public/data/withdrawals/{withdrawalId}": {
+      "schema": "Withdrawal",
+      "description": "Collection of all advance and settlement records."
+    },
+    "/artifacts/advance-system-v3/public/data/system_configs/{configId}": {
+      "schema": "SystemConfig",
+      "description": "Collection for organizational settings."
+    }
+  }
+}

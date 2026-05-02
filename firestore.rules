@@ -1,0 +1,87 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitive Definition
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Helper to check if user is a verified employee (using anonymous auth for now as requested)
+    // In a real prod app, better to check email domain or similar.
+    function isAuthenticated() {
+      return isSignedIn();
+    }
+
+    // 1. Withdrawal Validation Blueprint
+    function isValidWithdrawal(data) {
+      return data.keys().hasAll(['advanceId', 'employeeName', 'status', 'totalAmount'])
+        && data.advanceId is string && data.advanceId.size() <= 64
+        && data.employeeName is string && data.employeeName.size() <= 100
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.totalAmount is number
+        && (!('clearanceStatus' in data) || data.clearanceStatus in ['none', 'partial', 'cleared'])
+        && (!('actualSpend' in data) || data.actualSpend is number)
+        && (!('balance' in data) || data.balance is number)
+        && (!('createdAt' in data) || data.createdAt is string)
+        && (!('items' in data) || data.items is list)
+        && (!('receipts' in data) || data.receipts is list);
+    }
+
+    // 2. SystemConfig Validation Blueprint
+    function isValidSystemConfig(data) {
+      return (!('execPin' in data) || (data.execPin is string && data.execPin.size() <= 20))
+        && (!('accPin' in data) || (data.accPin is string && data.accPin.size() <= 20))
+        && (!('list' in data) || (data.list is list && data.list.size() <= 2000));
+    }
+
+    match /artifacts/advance-system-v3/public/data {
+      
+      match /withdrawals/{withdrawalId} {
+        allow list: if isAuthenticated();
+        allow get: if isAuthenticated();
+        
+        allow create: if isAuthenticated() 
+          && isValidId(withdrawalId)
+          && isValidWithdrawal(incoming())
+          && incoming().status == 'pending'
+          && incoming().clearanceStatus == 'none'
+          && incoming().actualSpend == 0
+          && incoming().balance == incoming().totalAmount;
+
+        allow update: if isAuthenticated()
+          && isValidWithdrawal(incoming())
+          && (
+            // Action: Approve/Reject (Executive)
+            (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedAt'])) ||
+            // Action: Clear (Employee/Accountant)
+            (incoming().diff(existing()).affectedKeys().hasOnly(['clearanceStatus', 'actualSpend', 'balance', 'receipts', 'clearedAt']))
+          );
+      }
+
+      match /system_configs/{configId} {
+        allow get, list: if isAuthenticated();
+        
+        allow write: if isAuthenticated()
+          && isValidId(configId)
+          && isValidSystemConfig(incoming());
+      }
+    }
+  }
+}

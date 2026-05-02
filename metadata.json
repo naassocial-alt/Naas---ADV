@@ -1,0 +1,8 @@
+{
+  "name": "Advance Pro",
+  "description": "High-performance Cash Advance & Settlement System with AI OCR and LINE Notifications.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": []
+}
