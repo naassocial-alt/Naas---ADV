@@ -45,6 +45,7 @@ export interface Withdrawal {
   createdAt: string;
   approvedAt?: string;
   clearedAt?: string;
+  clearanceDeadline?: string;
   projectIds: string[];
   items: Array<{
     name: string;

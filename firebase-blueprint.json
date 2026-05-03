@@ -15,6 +15,7 @@
         "createdAt": { "type": "string", "format": "date-time" },
         "approvedAt": { "type": "string", "format": "date-time" },
         "clearedAt": { "type": "string", "format": "date-time" },
+        "clearanceDeadline": { "type": "string", "format": "date-time" },
         "items": { "type": "array" },
         "receipts": { "type": "array" }
       },

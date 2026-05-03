@@ -40,6 +40,9 @@ service cloud.firestore {
         && (!('actualSpend' in data) || data.actualSpend is number)
         && (!('balance' in data) || data.balance is number)
         && (!('createdAt' in data) || data.createdAt is string)
+        && (!('approvedAt' in data) || data.approvedAt is string || data.approvedAt == null)
+        && (!('clearedAt' in data) || data.clearedAt is string || data.clearedAt == null)
+        && (!('clearanceDeadline' in data) || data.clearanceDeadline is string || data.clearanceDeadline == null)
         && (!('items' in data) || data.items is list)
         && (!('receipts' in data) || data.receipts is list);
     }
@@ -68,10 +71,11 @@ service cloud.firestore {
         allow update: if isAuthenticated()
           && isValidWithdrawal(incoming())
           && (
-            // Action: Approve/Reject (Executive)
-            (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'approvedAt'])) ||
-            // Action: Clear (Employee/Accountant)
-            (incoming().diff(existing()).affectedKeys().hasOnly(['clearanceStatus', 'actualSpend', 'balance', 'receipts', 'clearedAt']))
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'approvedAt', 'clearanceDeadline', 
+              'clearanceStatus', 'actualSpend', 'balance', 
+              'receipts', 'clearedAt'
+            ])
           );
       }
 
