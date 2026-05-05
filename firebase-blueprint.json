@@ -23,11 +23,12 @@
     },
     "SystemConfig": {
       "title": "System Configuration",
-      "description": "Global settings like admin PINs or employee lists.",
+      "description": "Global settings like admin PINs, employee lists, or integration URLs.",
       "type": "object",
       "properties": {
         "execPin": { "type": "string" },
         "accPin": { "type": "string" },
+        "sheetsUrl": { "type": "string" },
         "list": { "type": "array" }
       }
     }

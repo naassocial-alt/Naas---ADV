@@ -51,6 +51,7 @@ service cloud.firestore {
     function isValidSystemConfig(data) {
       return (!('execPin' in data) || (data.execPin is string && data.execPin.size() <= 20))
         && (!('accPin' in data) || (data.accPin is string && data.accPin.size() <= 20))
+        && (!('sheetsUrl' in data) || (data.sheetsUrl is string && data.sheetsUrl.size() <= 500))
         && (!('list' in data) || (data.list is list && data.list.size() <= 2000));
     }
 

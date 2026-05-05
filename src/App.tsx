@@ -5,40 +5,20 @@ import {
   Image as ImageIcon, ScanLine, User, PieChart, Settings, UserPlus, Zap,
   X, FileText, Calendar
 } from 'lucide-react';
-import { initializeApp, getApps } from 'firebase/app';
 import { 
-  getFirestore, collection, doc, addDoc, updateDoc, onSnapshot, setDoc, getDocFromServer
+  collection, doc, addDoc, updateDoc, onSnapshot, setDoc, getDocFromServer
 } from 'firebase/firestore';
 import { 
-  getAuth, signInAnonymously, onAuthStateChanged 
+  signInAnonymously, onAuthStateChanged 
 } from 'firebase/auth';
 import { GoogleGenAI } from "@google/genai";
-import firebaseConfig from '../firebase-applet-config.json';
-import { OperationType, Withdrawal, Receipt, SystemConfigs } from './types';
-
-// --- 1. Firebase & AI Setup ---
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+import { db, auth } from './lib/firebase';
+import { handleFirestoreError, OperationType } from './lib/firestore-errors';
+import { Withdrawal, Receipt, SystemConfigs } from './types';
+import { WeeklyReportUI } from './components/WeeklyReportUI';
+// --- 2. AI Setup ---
 const appId = 'advance-system-v3'; 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
-// --- 2. Error Handling ---
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
 
 // --- 3. Constants & Helpers ---
 const INITIAL_EMPLOYEES = ["สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน"];
@@ -147,6 +127,149 @@ const buildRequestFlex = (data: Withdrawal, appId: string) => {
   };
 };
 
+const buildWeeklyReportFlex = (withdrawals: Withdrawal[]) => {
+  const pendingByEmployee = withdrawals
+    .filter(w => w.status === 'approved' && w.clearanceStatus !== 'cleared')
+    .reduce((acc, w) => {
+      if (!acc[w.employeeName]) {
+        acc[w.employeeName] = {
+          employeeName: w.employeeName,
+          totalBalance: 0,
+          items: []
+        };
+      }
+      acc[w.employeeName].totalBalance += w.balance;
+      acc[w.employeeName].items.push(w);
+      return acc;
+    }, {} as Record<string, { employeeName: string; totalBalance: number; items: Withdrawal[] }>);
+
+  const employees = Object.values(pendingByEmployee);
+  const COLORS = ['#1A4B5F', '#267F8C', '#3F7B9D', '#5FA8D3'];
+
+  const contents = employees.slice(0, 10).map((emp, idx) => {
+    const bgColor = COLORS[idx % COLORS.length];
+    
+    const itemsFlex = emp.items.map(item => {
+      const deadline = item.clearanceDeadline ? new Date(item.clearanceDeadline) : new Date(new Date(item.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000);
+      const diffDays = Math.ceil((deadline.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
+      const progress = Math.min((item.actualSpend / item.totalAmount) * 100, 100);
+      const isUrgent = diffDays <= 7;
+
+      return {
+        type: "box",
+        layout: "vertical",
+        margin: "lg",
+        contents: [
+          {
+            type: "text",
+            text: item.advanceId,
+            size: "xxs",
+            color: "#111111",
+            weight: "bold"
+          },
+          {
+            type: "text",
+            text: `฿${item.actualSpend.toLocaleString()} / ฿${item.totalAmount.toLocaleString()}`,
+            size: "xxs",
+            color: "#555555",
+            margin: "xs"
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            contents: [
+              {
+                type: "box",
+                layout: "vertical",
+                contents: [{ type: "filler" }],
+                width: `${progress}%`,
+                backgroundColor: isUrgent ? "#D40808" : bgColor,
+                height: "4px"
+              }
+            ],
+            backgroundColor: "#EEEEEE",
+            height: "4px",
+            margin: "sm"
+          },
+          {
+            type: "text",
+            text: diffDays < 0 ? `เกินกำหนด ${Math.abs(diffDays)} วัน` : isUrgent ? `ด่วน! ${diffDays} วัน` : `เหลือ ${diffDays} วัน`,
+            size: "xxs",
+            color: isUrgent ? "#D40808" : "#888888",
+            weight: isUrgent ? "bold" : "regular",
+            align: "end",
+            margin: "xs"
+          }
+        ]
+      };
+    });
+
+    return {
+      type: "bubble",
+      size: "micro",
+      header: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: bgColor,
+        paddingTop: "16px",
+        paddingAll: "12px",
+        paddingBottom: "16px",
+        contents: [
+          {
+            type: "text",
+            text: emp.employeeName,
+            color: "#FFFFFF",
+            size: "xs",
+            weight: "bold",
+            wrap: true
+          },
+          {
+            type: "text",
+            text: `รวม ฿${emp.totalBalance.toLocaleString()}`,
+            color: "#FFFFFF",
+            size: "xs",
+            margin: "xs"
+          }
+        ]
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        paddingAll: "12px",
+        contents: itemsFlex
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          {
+            type: "button",
+            margin: "xs",
+            style: "secondary",
+            height: "sm",
+            color: `${bgColor}20`,
+            // adjustMode removed as it might not be standard in some flex versions or we just stick to what was provided
+            action: {
+              type: "uri",
+              label: "เคลียร์ยอด",
+              uri: "https://ais-dev-2cqr2ogim7ho44kzyrqqga-125162703188.asia-east1.run.app" // Link back to app
+            }
+          }
+        ]
+      }
+    };
+  });
+
+  return {
+    type: "flex",
+    altText: "Weekly Advance Report",
+    contents: {
+      type: "carousel",
+      contents: contents
+    }
+  };
+};
+
 const syncToSheets = async (url: string, data: any) => {
   if (!url) return;
   try {
@@ -224,7 +347,7 @@ export default function App() {
   const [dynamicEmployees, setDynamicEmployees] = useState<string[]>(INITIAL_EMPLOYEES);
   const [dynamicProjects, setDynamicProjects] = useState<string[]>(INITIAL_PROJECTS);
   const [dynamicCategories, setDynamicCategories] = useState<string[]>(INITIAL_CATEGORIES);
-  const [systemConfigs, setSystemConfigs] = useState<SystemConfigs>({ execPin: '888', accPin: '123', sheetsUrl: '' });
+  const [systemConfigs, setSystemConfigs] = useState<SystemConfigs>({ execPin: '888', accPin: '123', sheetsUrl: 'https://script.google.com/macros/s/AKfycbzJ35sguFnu7RANIhAKmzeV-63Jc53A1sSRfpi0TZ0ZOqB2v1pazW7c6BLTp_6GoJS0/exec' });
   const [isSettingsAuthed, setIsSettingsAuthed] = useState(false);
   const [showSettingsLogin, setShowSettingsLogin] = useState(false);
   const [settingsPassword, setSettingsPassword] = useState('');
@@ -563,18 +686,28 @@ export default function App() {
     } else alert("รหัสผ่านไม่ถูกต้อง");
   };
 
-  const sendWeeklySummary = async () => {
-    setIsBusy(true);
-    try {
-      const res = await fetch("/api/trigger-weekly-report", { method: "POST" });
-      if (res.ok) alert("ส่งสรุปประจำสัปดาห์เข้า LINE สำเร็จ");
-      else alert("เกิดข้อผิดพลาดในการส่งสรุป");
-    } catch (err) {
-      console.error(err);
-      alert("ไม่สามารถติดต่อเซิร์ฟเวอร์ได้");
-    } finally {
-      setIsBusy(false);
-    }
+  const sendDailySummary = async () => {
+    const pending = withdrawals.filter(w => w.status === 'approved' && w.clearanceStatus !== 'cleared');
+    if (pending.length === 0) return alert("ไม่มีรายการค้างเคลียร์สำหรับวันนี้");
+    
+    const summary = pending.map(w => {
+      const created = new Date(w.createdAt).getTime();
+      const deadline = w.clearanceDeadline ? new Date(w.clearanceDeadline).getTime() : (created + 30 * 24 * 60 * 60 * 1000);
+      const remainingDays = Math.ceil((deadline - new Date().getTime()) / (1000 * 60 * 60 * 24));
+      const statusText = remainingDays < 0 ? `เกินกำหนด ${Math.abs(remainingDays)} วัน` : `เหลือเวลา ${remainingDays} วัน`;
+      return `• ${w.advanceId} [${w.employeeName}]\n  ค้าง: ฿${w.balance.toLocaleString()} / ฿${w.totalAmount.toLocaleString()}\n  ${statusText} (ครบกำหนด: ${new Date(deadline).toLocaleDateString('th-TH')})`;
+    }).join('\n\n');
+    
+    await notifyLine(`📊 สรุปรายการค้างเคลียร์ประจำวัน\nณ วันที่: ${new Date().toLocaleDateString('th-TH')}\nจำนวน: ${pending.length} รายการ\n\n${summary}`);
+    alert("ส่งสรุปประจำวันเข้า LINE แล้ว");
+  };
+
+  const sendWeeklyReport = async () => {
+    const flex = buildWeeklyReportFlex(withdrawals);
+    if ((flex.contents as any).contents.length === 0) return alert("ไม่มีรายการค้างเคลียร์");
+    
+    await notifyLine("📊 Weekly Advance Report", 'flex', flex);
+    alert("ส่งรายงานรายสัปดาห์เข้า LINE แล้ว");
   };
 
   const updateDeadline = async (dateStr: string) => {
@@ -636,10 +769,16 @@ export default function App() {
   };
 
   const updatePasswords = async () => {
+    if (isBusy) return;
+    setIsBusy(true);
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), systemConfigs);
-      alert("อัปเดตรหัสผ่านสำเร็จ");
-    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs/passwords'); }
+      alert("บันทึกการตั้งค่าระบบและรหัสผ่านสำเร็จ");
+    } catch (e) { 
+      handleFirestoreError(e, OperationType.WRITE, 'system_configs/passwords'); 
+    } finally {
+      setIsBusy(false);
+    }
   };
 
   if (loading) return <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4"><Loader2 className="w-10 h-10 animate-spin text-blue-600"/><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Loading System...</p></div>;
@@ -663,6 +802,7 @@ export default function App() {
             { id: 'request', label: 'ขอเบิก', icon: Plus },
             { id: 'clearance', label: 'เคลียร์', icon: Wallet },
             { id: 'history', label: 'ประวัติ', icon: HistoryIcon },
+            { id: 'weekly', label: 'รายงาน', icon: PieChart },
             { id: 'dashboard', label: 'สรุป', icon: BarChart3 },
             { id: 'approvals', label: 'อนุมัติ', icon: Lock },
             { id: 'settings', label: 'ตั้งค่า', icon: Settings }
@@ -895,6 +1035,31 @@ export default function App() {
           </div>
         )}
 
+        {/* TAB 4: Weekly Report */}
+        {activeTab === 'weekly' && (
+          <div className="space-y-6 animate-in fade-in">
+            <div className="flex justify-between items-end px-1">
+              <div>
+                <h2 className="text-2xl font-black tracking-tighter text-slate-900 uppercase leading-none">Weekly Report</h2>
+                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Pending Advances Overview</p>
+              </div>
+              <button 
+                onClick={sendWeeklyReport}
+                className="flex items-center gap-2 bg-[#06C755] text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest hover:brightness-95 transition-all shadow-md active:scale-95"
+              >
+                <Zap className="w-3 h-3 fill-current" /> Send to LINE
+              </button>
+            </div>
+
+            <WeeklyReportUI 
+              withdrawals={withdrawals} 
+              onClear={(advanceId) => {
+                setClrForm({ ...clrForm, advanceId });
+                setActiveTab('clearance');
+              }} 
+            />
+          </div>
+        )}
         {/* TAB 4: Dashboard */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6 animate-in fade-in pb-10">
@@ -1139,7 +1304,14 @@ export default function App() {
                 </div>
               </div>
 
-              <button onClick={updatePasswords} className="w-full bg-[#0F172A] text-white py-4 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all">Update Access Pins</button>
+              <button 
+                disabled={isBusy}
+                onClick={updatePasswords} 
+                className="w-full bg-[#0F172A] text-white py-4 rounded-2xl font-black text-[10px] uppercase tracking-[0.2em] shadow-xl active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                {isBusy ? 'Updating...' : 'Update Access Pins'}
+              </button>
             </div>
 
             <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
@@ -1165,7 +1337,14 @@ export default function App() {
                     <br/>กรุณาสร้างแผ่นงาน Google Sheets ให้มีชื่อตรงกันทั้ง 2 หน้าก่อนนำ Webhook มาใส่
                   </p>
                 </div>
-                <button onClick={updatePasswords} className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg">Save Sync Settings</button>
+                <button 
+                  disabled={isBusy}
+                  onClick={updatePasswords} 
+                  className="w-full bg-blue-600 text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+                  {isBusy ? 'Saving...' : 'Save Sync Settings'}
+                </button>
               </div>
 
               <div className="border-t border-slate-50 pt-6 space-y-4">
@@ -1190,8 +1369,8 @@ export default function App() {
                   </div>
                 </div>
 
-                <button onClick={sendWeeklySummary} className="w-full bg-slate-900 text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg flex items-center justify-center gap-2">
-                  <PieChart className="w-4 h-4" /> ส่งสรุปรายงานประจำสัปดาห์ (ทุกวันจันทร์ 07:30 น.)
+                <button onClick={sendDailySummary} className="w-full bg-slate-900 text-white py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg flex items-center justify-center gap-2">
+                  <PieChart className="w-4 h-4" /> ส่งสรุปรายงานประจำวัน (Manual Trigger)
                 </button>
               </div>
             </div>
