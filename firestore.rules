@@ -31,11 +31,10 @@ service cloud.firestore {
 
     // 1. Withdrawal Validation Blueprint
     function isValidWithdrawal(data) {
-      return data.keys().hasAll(['advanceId', 'employeeName', 'status', 'totalAmount'])
-        && data.advanceId is string && data.advanceId.size() <= 64
-        && data.employeeName is string && data.employeeName.size() <= 100
-        && data.status in ['pending', 'approved', 'rejected']
-        && data.totalAmount is number
+      return (!('advanceId' in data) || (data.advanceId is string && data.advanceId.size() <= 64))
+        && (!('employeeName' in data) || (data.employeeName is string && data.employeeName.size() <= 100))
+        && (!('status' in data) || data.status in ['pending', 'approved', 'rejected'])
+        && (!('totalAmount' in data) || data.totalAmount is number)
         && (!('clearanceStatus' in data) || data.clearanceStatus in ['none', 'partial', 'cleared'])
         && (!('actualSpend' in data) || data.actualSpend is number)
         && (!('balance' in data) || data.balance is number)
@@ -44,7 +43,13 @@ service cloud.firestore {
         && (!('clearedAt' in data) || data.clearedAt is string || data.clearedAt == null)
         && (!('clearanceDeadline' in data) || data.clearanceDeadline is string || data.clearanceDeadline == null)
         && (!('items' in data) || data.items is list)
-        && (!('receipts' in data) || data.receipts is list);
+        && (!('receipts' in data) || data.receipts is list)
+        && (!('accountStatus' in data) || data.accountStatus in ['open', 'closed'])
+        && (!('finalApprovedTotal' in data) || data.finalApprovedTotal is number)
+        && (!('accountingConclusion' in data) || data.accountingConclusion is string)
+        && (!('closedAt' in data) || data.closedAt is string)
+        && (!('bankAccount' in data) || data.bankAccount is map)
+        && (!('transferSlip' in data) || data.transferSlip is string);
     }
 
     // 2. SystemConfig Validation Blueprint
@@ -55,11 +60,12 @@ service cloud.firestore {
         && (!('list' in data) || (data.list is list && data.list.size() <= 2000));
     }
 
-    match /artifacts/advance-system-v3/public/data {
+    match /artifacts/{appId}/public/data {
       
       match /withdrawals/{withdrawalId} {
         allow list: if isAuthenticated();
         allow get: if isAuthenticated();
+        allow delete: if isAuthenticated();
         
         allow create: if isAuthenticated() 
           && isValidId(withdrawalId)
@@ -75,7 +81,9 @@ service cloud.firestore {
             incoming().diff(existing()).affectedKeys().hasOnly([
               'status', 'approvedAt', 'clearanceDeadline', 
               'clearanceStatus', 'actualSpend', 'balance', 
-              'receipts', 'clearedAt'
+              'receipts', 'clearedAt',
+              'accountStatus', 'finalApprovedTotal', 'accountingConclusion', 'closedAt',
+              'transferSlip', 'bankAccount'
             ])
           );
       }

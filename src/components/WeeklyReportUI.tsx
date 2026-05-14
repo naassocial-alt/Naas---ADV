@@ -1,5 +1,5 @@
 import React from 'react';
-import { motion } from 'framer-motion';
+import { motion } from 'motion/react';
 import { Withdrawal } from '../types';
 import { Wallet, Calendar, AlertCircle } from 'lucide-react';
 
@@ -84,7 +84,14 @@ export const WeeklyReportUI: React.FC<WeeklyReportUIProps> = ({ withdrawals, onC
                   return (
                     <div key={item.id} className="space-y-2">
                       <div className="flex justify-between items-start">
-                        <span className="text-[10px] font-black text-slate-800 uppercase">{item.advanceId}</span>
+                        <div className="flex flex-col">
+                          <span className="text-[10px] font-black text-slate-800 uppercase">{item.advanceId}</span>
+                          {item.bankAccount && (
+                            <span className="text-[8px] font-bold text-slate-400 uppercase flex items-center gap-1">
+                              <Wallet className="w-2.5 h-2.5" /> {item.bankAccount.bankName} {item.bankAccount.accountNumber}
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1 text-[9px] font-bold text-slate-400">
                            <Calendar className="w-3 h-3" />
                            {deadline.toLocaleDateString('th-TH', { day: '2-digit', month: '2-digit' })}

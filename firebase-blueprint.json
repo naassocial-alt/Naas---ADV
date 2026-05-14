@@ -17,7 +17,13 @@
         "clearedAt": { "type": "string", "format": "date-time" },
         "clearanceDeadline": { "type": "string", "format": "date-time" },
         "items": { "type": "array" },
-        "receipts": { "type": "array" }
+        "receipts": { "type": "array" },
+        "accountStatus": { "enum": ["open", "closed"] },
+        "finalApprovedTotal": { "type": "number" },
+        "accountingConclusion": { "type": "string" },
+        "closedAt": { "type": "string", "format": "date-time" },
+        "bankAccount": { "type": "object" },
+        "transferSlip": { "type": "string" }
       },
       "required": ["advanceId", "employeeName", "status", "totalAmount"]
     },
