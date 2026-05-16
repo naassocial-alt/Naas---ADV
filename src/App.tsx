@@ -31,6 +31,13 @@ import { WeeklyReportUI } from './components/WeeklyReportUI';
 const appId = 'advance-system-v3'; 
 
 // --- 3. Constants & Helpers ---
+const cleanData = (obj: any) => {
+  const newObj = { ...obj };
+  Object.keys(newObj).forEach(key => {
+    if (newObj[key] === undefined) delete newObj[key];
+  });
+  return newObj;
+};
 const INITIAL_EMPLOYEES = [
   "สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน",
   "นันทวัฒน์ ม้าแก้ว", "ศรายุทธ แก้วมณี", "ชัยรัตน์ จิตร์งาม", "อธิภัทร ชาติไทย", "เกียรติกุล มาดี"
@@ -243,53 +250,45 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
           },
           {
             type: "box",
-            layout: "horizontal",
-            contents: [
-              {
-                type: "text",
-                text: "โอนเข้าบัญชี",
-                size: "sm",
-                color: "#888888",
-                flex: 4
-              },
-              {
-                type: "text",
-                text: data.bankAccount ? `${data.bankAccount.bankName} ${data.bankAccount.accountNumber}` : "-",
-                size: "sm",
-                color: "#111111",
-                flex: 6,
-                align: "end",
-                wrap: true
-              }
-            ],
-            margin: "md"
-          },
-          {
-            type: "box",
             layout: "vertical",
             margin: "lg",
             spacing: "xs",
             contents: data.items.map((item, idx) => ({
               type: "box",
-              layout: "horizontal",
+              layout: "vertical",
+              margin: "sm",
               contents: [
                 {
-                  type: "text",
-                  text: `${idx + 1}. ${item.name}`,
-                  size: "xs",
-                  color: "#555555",
-                  flex: 7,
-                  wrap: true
+                  type: "box",
+                  layout: "horizontal",
+                  contents: [
+                    {
+                      type: "text",
+                      text: `${idx + 1}. ${item.name}`,
+                      size: "xs",
+                      color: "#555555",
+                      flex: 7,
+                      wrap: true
+                    },
+                    {
+                      type: "text",
+                      text: `฿${(item.amount || 0).toLocaleString()}`,
+                      size: "xs",
+                      color: "#111111",
+                      flex: 3,
+                      align: "end",
+                      weight: "bold"
+                    }
+                  ]
                 },
-                {
+                item.projectId ? {
                   type: "text",
-                  text: `฿${(item.amount || 0).toLocaleString()}`,
-                  size: "xs",
-                  color: "#111111",
-                  flex: 3,
-                  align: "end",
-                  weight: "bold"
-                }
+                  text: ` Project: ${item.projectId}`,
+                  size: "xxs",
+                  color: "#999999",
+                  margin: "xs",
+                  indent: "md"
+                } : { type: "spacer", size: "xs" }
               ]
             }))
           },
@@ -345,33 +344,40 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
       },
       footer: {
         type: "box",
-        layout: "horizontal",
-        spacing: "md",
+        layout: "vertical",
+        spacing: "sm",
         paddingStart: "xl",
         paddingEnd: "xl",
         paddingBottom: "xl",
         contents: [
           {
-            type: "button",
-            style: "primary",
-            color: "#267F8C",
-            height: "sm",
-            action: {
-              type: "uri",
-              label: "อนุมัติ",
-              uri: `${appUrl}?approve=${data.id}`
-            }
-          },
-          {
-            type: "button",
-            style: "primary",
-            color: "#E53935",
-            height: "sm",
-            action: {
-              type: "message",
-              label: "ไม่อนุมัติ",
-              text: `ไม่อนุมัติ ${data.advanceId}`
-            }
+            type: "box",
+            layout: "horizontal",
+            spacing: "md",
+            contents: [
+              {
+                type: "button",
+                style: "primary",
+                color: "#267F8C",
+                height: "sm",
+                action: {
+                  type: "postback",
+                  label: "อนุมัติ",
+                  data: `action=approve&id=${data.id}&appId=${appId}`
+                }
+              },
+              {
+                type: "button",
+                style: "primary",
+                color: "#E53935",
+                height: "sm",
+                action: {
+                  type: "postback",
+                  label: "ไม่อนุมัติ",
+                  data: `action=reject&id=${data.id}&appId=${appId}`
+                }
+              }
+            ]
           }
         ]
       }
@@ -379,52 +385,124 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
   };
 };
 
-const buildStatusFlex = (title: string, message: string, color: string = "#0F172A", icon?: string, buttonConfig?: { label: string, url: string }) => {
+const buildStatusFlex = (title: string, message: string, color: string = "#0F172A", icon?: string, buttonConfig?: { label: string, url: string }, withdrawal?: Withdrawal) => {
+  const bodyContents: any[] = [
+    {
+      type: "box",
+      layout: "horizontal",
+      contents: [
+        { type: "text", text: icon || "", size: "lg", flex: 0 },
+        {
+          type: "box",
+          layout: "vertical",
+          contents: [
+            { type: "text", text: title, weight: "bold", size: "sm", color: color },
+            { type: "text", text: message, size: "xs", color: "#64748B", wrap: true, margin: "xs" }
+          ],
+          margin: "md"
+        }
+      ]
+    }
+  ];
+
+  if (withdrawal) {
+    if (withdrawal.items && withdrawal.items.length > 0) {
+      bodyContents.push({ type: "separator", margin: "md" });
+      bodyContents.push({
+        type: "box",
+        layout: "vertical",
+        margin: "md",
+        spacing: "xs",
+        contents: withdrawal.items.map(it => ({
+          type: "box",
+          layout: "horizontal",
+          contents: [
+            { type: "text", text: `• ${it.name}`, size: "xxs", color: "#475569", flex: 7 },
+            { type: "text", text: `฿${(Number(it.amount)||0).toLocaleString()}`, size: "xxs", color: "#1e293b", weight: "bold", flex: 3, align: "end" }
+          ]
+        }))
+      });
+    }
+
+    if (withdrawal.bankAccount) {
+      bodyContents.push({ type: "separator", margin: "md" });
+      bodyContents.push({
+        type: "box",
+        layout: "vertical",
+        margin: "md",
+        backgroundColor: "#F8FAFC",
+        paddingAll: "sm",
+        contents: [
+          { type: "text", text: "โอนเข้าบัญชี:", size: "xxs", color: "#94A3B8", weight: "bold" },
+          { type: "text", text: `${withdrawal.bankAccount.bankName} ${withdrawal.bankAccount.accountNumber}`, size: "xs", color: "#1E293B", weight: "bold", margin: "xs" },
+          { type: "text", text: withdrawal.bankAccount.accountName, size: "xs", color: "#475569", margin: "xs" }
+        ]
+      });
+    }
+  }
+
   const contents: any = {
     type: "bubble",
     size: "mega",
     body: {
       type: "box",
       layout: "vertical",
-      contents: [
-        {
-          type: "box",
-          layout: "horizontal",
-          contents: [
-            { type: "text", text: icon || "🔔", size: "lg", flex: 0 },
-            {
-              type: "box",
-              layout: "vertical",
-              contents: [
-                { type: "text", text: title, weight: "bold", size: "sm", color: color },
-                { type: "text", text: message, size: "xs", color: "#64748B", wrap: true, margin: "xs" }
-              ],
-              margin: "md"
-            }
-          ]
-        }
-      ],
+      contents: bodyContents,
       paddingAll: "lg"
     }
   };
 
+  const footerContents: any[] = [];
+  
+  if (withdrawal && withdrawal.bankAccount) {
+    footerContents.push({
+      type: "button",
+      style: "secondary",
+      height: "sm",
+      margin: "sm",
+      action: {
+        type: "clipboard",
+        label: "คัดลอกเลขบัญชี",
+        clipboardText: withdrawal.bankAccount.accountNumber.replace(/-/g, '')
+      }
+    });
+    footerContents.push({
+      type: "button",
+      style: "secondary",
+      height: "sm",
+      margin: "xs",
+      action: {
+        type: "clipboard",
+        label: "คัดลอกชื่อบัญชี",
+        clipboardText: withdrawal.bankAccount.accountName
+      }
+    });
+  }
+
   if (buttonConfig) {
+    footerContents.push({
+      type: "button",
+      style: "primary",
+      color: color,
+      height: "sm",
+      margin: "md",
+      action: {
+        type: "uri",
+        label: buttonConfig.label,
+        uri: buttonConfig.url
+      }
+    });
+  }
+
+  if (footerContents.length > 0) {
     contents.footer = {
       type: "box",
       layout: "vertical",
-      contents: [
-        {
-          type: "button",
-          style: "primary",
-          color: color,
-          height: "sm",
-          action: {
-            type: "uri",
-            label: buttonConfig.label,
-            uri: buttonConfig.url
-          }
-        }
-      ]
+      spacing: "xs",
+      contents: footerContents,
+      paddingStart: "lg",
+      paddingEnd: "lg",
+      paddingBottom: "lg"
     };
   }
 
@@ -860,6 +938,7 @@ export default function App() {
   const [clrProjSearchIdx, setClrProjSearchIdx] = useState<number | null>(null);
   const [clrProjSearchTerm, setClrProjSearchTerm] = useState('');
   const [settingsProjSearch, setSettingsProjSearch] = useState('');
+  const [selectedApproverLineId, setSelectedApproverLineId] = useState('');
   
   const [showReqProjList, setShowReqProjList] = useState(false);
   const [showPassModal, setShowPassModal] = useState<{ 
@@ -886,6 +965,7 @@ export default function App() {
   const [selectedReceipts, setSelectedReceipts] = useState<number[]>([]);
   const [password, setPassword] = useState('');
   const [ocrModal, setOcrModal] = useState({ show: false, total: 0 });
+  const [staffEditList, setStaffEditList] = useState<StaffRecord[]>([]);
   const [editingReceipt, setEditingReceipt] = useState<{ withdrawalId: string, index: number, data: Receipt } | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [passError, setPassError] = useState('');
@@ -906,16 +986,25 @@ export default function App() {
     const initAuth = async (retries = 3) => {
       try {
         await signInAnonymously(auth);
-      } catch (e) {
+      } catch (e: any) {
+        const errMsg = e.message || String(e);
+        const errCode = e.code || "";
+        
+        if (errCode === 'auth/admin-restricted-operation') {
+          console.warn("Anonymous Auth is disabled in Firebase Console.");
+          alert(" ระบบยืนยันตัวตนล้มเหลว: Anonymous Authentication ถูกปิดใช้งานใน Firebase Console\n\nกรุณาไปที่ Firebase Console > Authentication > Sign-in method แล้วเปิดใช้งาน 'Anonymous' เพื่อให้แอปทำงานได้ปกติ");
+          return; // Stop retrying for this specific error
+        }
+
         console.error(`Auth Attempt Failed (Retries left: ${retries}):`, e);
+
         if (retries > 0) {
           setTimeout(() => initAuth(retries - 1), 2000);
         } else {
-          const errMsg = (e as any).message || String(e);
           if (errMsg.includes('network-request-failed')) {
-            alert("❌ ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือปิด Adblocker แล้วลองใหม่อีกครั้ง");
+            alert(" ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือปิด Adblocker แล้วลองใหม่อีกครั้ง");
           } else {
-            alert("❌ ระบบยืนยันตัวตนล้มเหลว: " + errMsg);
+            alert(" ระบบยืนยันตัวตนล้มเหลว: " + errMsg);
           }
         }
       }
@@ -947,7 +1036,23 @@ export default function App() {
     const unsubC = onSnapshot(collection(db, configsPath), (snap) => {
       const data: any = {};
       snap.docs.forEach(d => data[d.id] = d.data());
-      if (data.passwords) setSystemConfigs(data.passwords);
+      
+      if (data.passwords) {
+        setSystemConfigs(data.passwords);
+        // If webAppUrl is missing, try to auto-set it
+        if (!data.passwords.webAppUrl) {
+          updateDoc(doc(db, configsPath, 'passwords'), { webAppUrl: window.location.origin });
+        }
+      } else {
+        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), { 
+          execPin: '888', 
+          accPin: '123', 
+          webAppUrl: window.location.origin,
+          allowedLineIds: [],
+          approvers: []
+        });
+      }
+
       if (data.employees && data.employees.list) setDynamicEmployees(data.employees.list);
       
       if (data.projects && data.projects.list) {
@@ -1005,17 +1110,18 @@ export default function App() {
           const ref = doc(db, `artifacts/${appId}/public/data/withdrawals/${target.id}`);
           const appUrl = systemConfigs.webAppUrl || window.location.origin;
 
-          updateDoc(ref, { 
+          updateDoc(ref, cleanData({ 
             status: 'approved', 
             approvedAt: new Date().toISOString(),
             clearanceDeadline: deadline.toISOString()
-          }).then(async () => {
+          })).then(async () => {
             const flex = buildStatusFlex(
-              "💎 อนุมัติการเบิก (ผ่าน URL)", 
+              " อนุมัติการเบิก (ผ่าน URL)", 
               `ID: ${target.advanceId}\nพนักงาน: ${target.employeeName}\nยอด: ฿${(target.totalAmount || 0).toLocaleString()}`, 
               "#10B981", 
-              "✅",
-              { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${target.id}&action=slip` }
+              "",
+              { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${target.id}&action=slip` },
+              target
             );
             await notifyLine("ผลการอนุมัติ (URL)", 'flex', flex);
             
@@ -1035,7 +1141,9 @@ export default function App() {
             window.history.replaceState({}, document.title, window.location.pathname);
           });
         } else {
-          alert(`รายการนี้ถูกดำเนินการไปแล้ว (สถานะปัจจุบัน: ${target.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'})`);
+          const statusText = target.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
+          const processedBy = target.approvedByName ? ` โดย ${target.approvedByName}` : '';
+          alert(`⚠️ รายการ ${target.advanceId} นี้ได้รับการ${statusText}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`);
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       }
@@ -1126,11 +1234,21 @@ export default function App() {
       // Top Spenders logic (from total requested)
       staffMap[w.employeeName] = (staffMap[w.employeeName] || 0) + w.totalAmount;
 
-      // Project logic - requested
-      (w.projectIds || []).forEach(pid => {
+      // Project logic - requested attribution using receipt distribution
+      const pIds = w.projectIds || [];
+      const total = w.totalAmount || 0;
+      
+      const projectReceipts: { [pid: string]: number } = {};
+      let totalReceiptAmount = 0;
+      (w.receipts || []).forEach(r => {
+        const amt = Number(r.amount || 0);
+        projectReceipts[r.projectId] = (projectReceipts[r.projectId] || 0) + amt;
+        totalReceiptAmount += amt;
+      });
+
+      pIds.forEach(pid => {
         if (!projectMap[pid]) projectMap[pid] = { requested: 0, cleared: 0, balance: 0 };
-        // Attribute requested amount equally split among mentioned projects
-        projectMap[pid].requested += (w.totalAmount || 0) / (w.projectIds.length || 1);
+        projectMap[pid].requested += total / (pIds.length || 1);
       });
 
       // Global category stats from the request items
@@ -1208,7 +1326,7 @@ export default function App() {
         balance: total, 
         receipts: []
       };
-      const docRef = await addDoc(collection(db, path), docData);
+      const docRef = await addDoc(collection(db, path), cleanData(docData));
       
       const appUrl = systemConfigs.webAppUrl || window.location.origin;
       const flex = buildRequestFlex({ id: docRef.id, ...docData } as any, appUrl);
@@ -1230,7 +1348,7 @@ export default function App() {
         });
       }
 
-      setNewReq({ employeeName: '', projectIds: [], items: [{ name: '', amount: 0, category: '' }], bankAccount: undefined });
+      setNewReq({ employeeName: '', projectIds: [], items: [{ name: '', amount: 0, category: '', projectId: '' }], bankAccount: undefined });
       setActiveTab('history');
     } catch (e) { handleFirestoreError(e, OperationType.CREATE, path); } finally { setIsBusy(false); }
   };
@@ -1246,97 +1364,12 @@ export default function App() {
 
   const handleAdditionalFile = async (idx: number, file: File | null) => {
     if (!file) return;
-    const temp = [...clrForm.receipts];
-    temp[idx].isProcessing = true;
-    setClrForm({ ...clrForm, receipts: temp });
-    
+    const temp = [...clrForm.receipts]; temp[idx].isProcessing = true; setClrForm({ ...clrForm, receipts: temp });
     const b64 = await compressImg(file);
     const updated = [...clrForm.receipts];
     const newDoc = { base64: b64, fileName: file.name };
-    updated[idx] = { 
-      ...updated[idx], 
-      additionalDocs: [...(updated[idx].additionalDocs || []), newDoc],
-      isProcessing: false 
-    };
+    updated[idx] = { ...updated[idx], additionalDocs: [...(updated[idx].additionalDocs || []), newDoc], isProcessing: false };
     setClrForm({ ...clrForm, receipts: updated });
-  };
-
-  const runAI = async () => {
-    if (clrForm.receipts.some(r => !r.base64)) return alert("แนบรูปสลิปให้ครบก่อน");
-    setIsBusy(true);
-    try {
-      const updated = await Promise.all(clrForm.receipts.map(async (r) => {
-        try {
-          const res = await fetch('/api/extract-receipt', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ image: r.base64 })
-          });
-          const json = await res.json();
-          if (json.error) throw new Error(json.error);
-          return { ...r, name: json.name || 'ไม่ระบุ', amount: json.amount || 0, originalAmount: json.amount || 0 } as Receipt;
-        } catch (err) {
-           console.error("Single receipt AI error:", err);
-           return { ...r, name: 'AI Error', amount: 0, originalAmount: 0 } as Receipt;
-        }
-      }));
-      
-      setClrForm({ ...clrForm, receipts: detectDuplicates(updated, withdrawals) });
-      setOcrModal({ show: true, total: updated.reduce((s, x) => s + Number(x.amount || 0), 0) });
-    } catch (e) { 
-      alert(`AI ล้มเหลว: ${(e as Error).message}`);
-      console.error(e); 
-    } finally { 
-      setIsBusy(false); 
-    }
-  };
-
-  const [staffEditList, setStaffEditList] = useState<StaffRecord[]>([]);
-  const [showStaffTable, setShowStaffTable] = useState(false);
-
-  useEffect(() => {
-    const list: StaffRecord[] = [];
-    dynamicEmployees.forEach(emp => {
-      const accs = employeeBankAccounts[emp] || [];
-      if (accs.length === 0) {
-        list.push({ nickname: emp, bank: '', accountNumber: '', accountName: '', id: `empty-${emp}-${Math.random().toString(36).slice(2,5)}` });
-      } else {
-        accs.forEach(acc => {
-          list.push({ nickname: emp, bank: acc.bankName, accountNumber: acc.accountNumber, accountName: acc.accountName, id: acc.id });
-        });
-      }
-    });
-    setStaffEditList(list);
-  }, [dynamicEmployees, employeeBankAccounts]);
-
-  const saveStaffTable = async () => {
-    setIsBusy(true);
-    try {
-      const nicknames = [...new Set(staffEditList.map(s => s.nickname).filter(n => n.trim()))];
-      const bankAccounts: { [name: string]: BankAccount[] } = {};
-      
-      staffEditList.forEach(s => {
-        if (!s.nickname.trim()) return;
-        if (!bankAccounts[s.nickname]) bankAccounts[s.nickname] = [];
-        if (s.bank || s.accountNumber || s.accountName) {
-           bankAccounts[s.nickname].push({
-             id: s.id.startsWith('empty-') ? Math.random().toString(36).substring(2, 9) : s.id,
-             bankName: s.bank,
-             accountNumber: s.accountNumber,
-             accountName: s.accountName,
-             isDefault: true
-           });
-        }
-      });
-
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: nicknames });
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'bank_accounts'), bankAccounts);
-      alert("บันทึกข้อมูลพนักงานและบัญชีธนาคารเรียบร้อยแล้ว");
-    } catch (e) {
-      alert("เกิดข้อผิดพลาดในการบันทึก: " + (e as Error).message);
-    } finally {
-      setIsBusy(false);
-    }
   };
 
   const handleBulkStaffExcelImport = async (file: File | null) => {
@@ -1352,12 +1385,7 @@ export default function App() {
           const worksheet = workbook.Sheets[firstSheetName];
           const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
           
-          // header: 1 returns array of arrays. We assume:
-          // Row 0 or 1 might be headers. We'll skip rows that look like headers or take rows that have data.
-          // Format: Nickname, Bank, AccNo, AccName
-          
           const filteredRows = json.filter((row: any[]) => row.length > 0 && row[0]);
-          // If first row is "ชื่อเล่น" or similar, skip it
           if (filteredRows[0][0] === "ชื่อเล่น" || filteredRows[0][0] === "Nickname") {
             filteredRows.shift();
           }
@@ -1409,13 +1437,10 @@ export default function App() {
           
           let importedNames: string[] = [];
           if (nameIdx !== -1) {
-            // Take from the column
             importedNames = json.slice(1)
               .map(row => (row[nameIdx] || '').toString().trim())
               .filter(n => n !== '');
           } else {
-            // Try to find the column anywhere if not in header row 0
-            // Or just take column 0 if user provided a simple list
             importedNames = json
               .map(row => (row[0] || '').toString().trim())
               .filter(n => n !== '' && n !== "รายชื่อโปรเจค" && n !== "Project List" && n !== "รายชื่อโปรเจกต์");
@@ -1441,22 +1466,97 @@ export default function App() {
     }
   };
 
+  const saveStaffTable = async () => {
+    const list = staffEditList.filter(s => s.nickname.trim());
+    if (list.length === 0) return alert("กรุณาระบุรายชื่ออย่างน้อย 1 รายการ");
+    
+    setIsBusy(true);
+    try {
+      const names = list.map(s => s.nickname);
+      const accounts: { [key: string]: BankAccount[] } = {};
+      list.forEach(s => {
+        if (s.bank || s.accountNumber) {
+          accounts[s.nickname] = [{
+            id: Math.random().toString(36).substring(2, 9),
+            bankName: s.bank,
+            accountNumber: s.accountNumber,
+            accountName: s.accountName,
+            isDefault: true
+          }];
+        }
+      });
+
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: names });
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'bank_accounts'), accounts);
+      alert("บันทึกข้อมูลพนักงานและบัญชีธนาคารเรียบร้อยแล้ว!");
+    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs'); } finally { setIsBusy(false); }
+  };
+
+  const runAI = async () => {
+    if (isBusy || !clrForm.advanceId) return;
+    const itemsWithImg = clrForm.receipts.filter(r => r.base64);
+    if (itemsWithImg.length === 0) return alert("กรุณาแนบสลิปอย่างน้อย 1 ใบเพื่อใช้ AI");
+
+    setIsBusy(true);
+    try {
+      const results = await Promise.all(itemsWithImg.map(async (r) => {
+        try {
+          const res = await fetch("/api/extract-receipt", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: r.base64 }),
+          });
+          if (!res.ok) throw new Error("AI extraction failed");
+          return await res.json();
+        } catch (e) {
+          console.error("AI Item error:", e);
+          return { name: r.name || 'Unknown Item', amount: r.amount || 0 };
+        }
+      }));
+
+      const nr = [...clrForm.receipts];
+      let total = 0;
+      let matchedIdx = 0;
+      
+      for (let i = 0; i < nr.length; i++) {
+        if (nr[i].base64) {
+          const ai = results[matchedIdx++];
+          nr[i].name = ai.name || nr[i].name;
+          nr[i].amount = ai.amount || nr[i].amount;
+          nr[i].originalAmount = ai.amount; // track original for "Edited" detection
+          total += nr[i].amount;
+        }
+      }
+
+      setClrForm({ ...clrForm, receipts: detectDuplicates(nr, withdrawals) });
+      setOcrModal({ show: true, total });
+    } catch (e) {
+      alert("AI Processing Failed: " + (e as Error).message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleSlipUpload = async (file: File | null) => {
     if (!file || !selectedWithdrawal?.id) return;
     setIsBusy(true);
     try {
       const b64 = await compressImg(file);
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedWithdrawal.id), {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedWithdrawal.id), cleanData({
         transferSlip: b64,
         status: 'approved'
-      });
-      await notifyLine(`💸 อัปโหลดหลักฐานการโอนเงินแล้ว\nID: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nยอด: ฿${selectedWithdrawal.totalAmount.toLocaleString()}`, 'text');
+      }));
+      await notifyLine(` อัปโหลดหลักฐานการโอนเงินแล้ว\nID: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nยอด: ฿${selectedWithdrawal.totalAmount.toLocaleString()}`, 'text');
       setSelectedWithdrawal({ ...selectedWithdrawal, transferSlip: b64, status: 'approved' });
     } catch (e) { handleFirestoreError(e, OperationType.UPDATE, 'withdrawals'); } finally { setIsBusy(false); }
   };
 
   const saveClearance = async () => {
-    if (isBusy || !selectedAdvData || !selectedAdvData.id) return;
+    if (isBusy) return;
+    if (!selectedAdvData || !selectedAdvData.id) {
+       alert("ไม่พบข้อมูลรายการเบิก (โปรดเลือกรายการจากรายการรอเคลียร์)");
+       return;
+    }
     setIsBusy(true);
     const path = `artifacts/${appId}/public/data/withdrawals/${selectedAdvData.id}`;
     try {
@@ -1493,20 +1593,20 @@ export default function App() {
       const combinedReceipts = optimizeReceipts([...(selectedAdvData.receipts || []), ...newItems]);
       
       // 2. Update Firestore
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedAdvData.id), {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedAdvData.id), cleanData({
         clearanceStatus: (selectedAdvData.totalAmount - newSpend) <= 0 ? 'cleared' : 'partial',
         actualSpend: newSpend, 
         balance: selectedAdvData.totalAmount - newSpend,
         receipts: combinedReceipts, 
         clearedAt: new Date().toISOString()
-      });
+      }));
       
       setOcrModal({ show: false, total: 0 });
       setClrForm({ advanceId: '', receipts: [{ name: '', amount: 0, base64: '', fileName: '', isProcessing: false, projectId: '', description: '', originalAmount: 0, additionalDocs: [] }] });
       setActiveTab('history');
       
-      const spendingDetail = clrForm.receipts.map(r => `• ${r.name}: ฿${r.amount.toLocaleString()}`).join('\n');
-      const flex = buildStatusFlex("✅ เคลียร์ยอดแล้ว", `ADV: ${selectedAdvData.advanceId}\nพนักงาน: ${selectedAdvData.employeeName}\nยอดเคลียร์: ฿${total.toLocaleString()}`, "#10B981", "💰");
+      const spendingDetail = clrForm.receipts.map(r => `• ${r.name}${r.projectId ? ' [' + r.projectId + ']' : ''}: ฿${(Number(r.amount)||0).toLocaleString()}`).join('\n');
+      const flex = buildStatusFlex("✅ เคลียร์ยอดแล้ว", `ADV: ${selectedAdvData.advanceId}\nพนักงาน: ${selectedAdvData.employeeName}\nยอดเคลียร์: ฿${total.toLocaleString()}\n\nรายการ:\n${spendingDetail}`, "#10B981", "💰");
       notifyLine("รายการเคลียร์ยอดใหม่", 'flex', flex);
       
       // 3. Sync to Sheets
@@ -1531,6 +1631,15 @@ export default function App() {
 
   const verifyAction = async () => {
     const pin = showPassModal.type === 'executive' ? systemConfigs.execPin : systemConfigs.accPin;
+    
+    const isApprovalAction = showPassModal.action === 'approve' || (showPassModal.action === 'doc_toggle' && showPassModal.nextDocStatus === 'approved');
+    const approver = (systemConfigs.approvers || []).find(a => a.lineId === selectedApproverLineId);
+
+    if (isApprovalAction && !approver) {
+      setPassError("กรุณาเลือกผู้อนุมัติจากรายชื่อ");
+      return;
+    }
+
     if (password === pin) {
       if (!showPassModal.targetId && showPassModal.targetIds.length === 0) {
         setShowPassModal({ show: false, action: null, targetId: null, targetIds: [], type: '', receiptIndex: null, receiptIndices: [], nextDocStatus: '' });
@@ -1544,7 +1653,6 @@ export default function App() {
         let successCount = 0;
         let deletedInfo: string[] = [];
 
-        // Process all operations in parallel for better performance
         await Promise.all(ids.map(async (tid) => {
           try {
             const path = `artifacts/${appId}/public/data/withdrawals/${tid}`;
@@ -1557,27 +1665,46 @@ export default function App() {
 
             if (showPassModal.action === 'approve') {
               if (!parent) return;
+              if (parent.status === 'approved') return; // Cannot approve again
+
               const deadline = new Date();
               deadline.setDate(deadline.getDate() + 30);
-              await updateDoc(ref, { 
+              await updateDoc(ref, cleanData({ 
                 status: 'approved', 
                 approvedAt: new Date().toISOString(),
+                approvedBy: approver?.lineId || 'system',
+                approvedByName: approver?.name || 'Authorized Personnel',
                 clearanceDeadline: deadline.toISOString()
-              });
+              }));
               const appUrl = systemConfigs.webAppUrl || window.location.origin;
               const flex = buildStatusFlex(
-                "💎 อนุมัติการเบิก", 
+                " อนุมัติการเบิก (โดย: " + (approver?.name || 'ผู้มีอำนาจ') + ")", 
                 `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}\nยอด: ฿${(Number(parent.totalAmount) || 0).toLocaleString()}`, 
                 "#10B981", 
-                "✅",
-                { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${parent.id}&action=slip` }
+                "",
+                { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${parent.id}&action=slip` },
+                parent
               );
-              notifyLine("ผลการอนุมัติ", 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
+              notifyLine("ผลการอนุมัติ โดย " + (approver?.name || 'ผู้มีอำนาจ'), 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
               successCount++;
             } else if (showPassModal.action === 'reject') {
               if (!parent) return;
-              await updateDoc(ref, { status: 'rejected' });
-              const flex = buildStatusFlex("❌ ปฏิเสธการเบิก", `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}`, "#EF4444", "🚫");
+              if (parent.status === 'rejected') return;
+
+              await updateDoc(ref, cleanData({ 
+                status: 'rejected',
+                approvedBy: approver?.lineId || 'system',
+                approvedByName: approver?.name || 'Authorized Personnel',
+                rejectedAt: new Date().toISOString()
+              }));
+              const flex = buildStatusFlex(
+                " ปฏิเสธการเบิก (โดย: " + (approver?.name || 'ผู้มีอำนาจ') + ")", 
+                `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}`, 
+                "#EF4444", 
+                "",
+                undefined,
+                parent
+              );
               notifyLine("ผลการปฏิเสธ", 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
               successCount++;
             } else if (showPassModal.action === 'withdraw_delete') {
@@ -1591,14 +1718,21 @@ export default function App() {
               if (indices.length > 0) {
                 const updated = optimizeReceipts([...(parent.receipts || [])]);
                 indices.sort((a,b) => b-a).forEach(idx => {
-                  if (updated[idx]) updated[idx].docStatus = showPassModal.nextDocStatus as any;
+                  if (updated[idx]) {
+                    if (showPassModal.nextDocStatus === 'approved' && updated[idx].docStatus === 'approved') return; // Skip already approved
+                    updated[idx].docStatus = showPassModal.nextDocStatus as any;
+                    if (showPassModal.nextDocStatus === 'approved') {
+                       updated[idx].approvedBy = approver?.lineId || 'system';
+                       updated[idx].approvedByName = approver?.name || 'Accountant';
+                    }
+                  }
                 });
                 await updateDoc(ref, { receipts: updated });
                 if (selectedWithdrawal?.id === parent.id) setSelectedWithdrawal({...parent, receipts: updated});
                 
                 if (showPassModal.nextDocStatus === 'approved') {
-                  const flex = buildStatusFlex("🏢 บัญชีรับรองสลิป (กลุ่ม)", `ADV: ${parent.advanceId}\nจำนวน: ${indices.length} รายการ`, "#0F172A", "💼");
-                  notifyLine("การรับรองสลิป", 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
+                  const flex = buildStatusFlex(" บัญชีรับรองสลิป (โดย: " + (approver?.name || 'ผู้มีอำนาจ') + ")", `ADV: ${parent.advanceId}\nจำนวน: ${indices.length} รายการ`, "#0F172A", "");
+                  notifyLine("การรับรองสลิป โดย " + (approver?.name || 'บัญชี'), 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
                 }
                 successCount++;
               }
@@ -1631,15 +1765,15 @@ export default function App() {
                const totalApproved = approvedReceipts.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
                const originalTotal = (Number(parent.totalAmount) || 0);
                const diff = totalApproved - originalTotal;
-               let statusLabel = diff === 0 ? '✅ ยอดใช้จ่ายพอดี' : (diff > 0 ? '🔴 คืนพนักงาน' : '🔵 คืนบริษัท');
+               let statusLabel = diff === 0 ? ' ยอดใช้จ่ายพอดี' : (diff > 0 ? ' คืนพนักงาน' : ' คืนบริษัท');
                await updateDoc(ref, { 
                  accountStatus: 'closed',
                  finalApprovedTotal: totalApproved,
                  accountingConclusion: statusLabel,
                  closedAt: new Date().toISOString()
                });
-               const summaryText = approvedReceipts.map(r => `• ${r.name}: ฿${(Number(r.amount)||0).toLocaleString()}`).join('\n');
-               notifyLine(`🏁 ปิดยอดบัญชีเรียบร้อย\nADV: ${parent.advanceId}\nสรุป:\n${summaryText}`).catch(err => console.warn("LINE Notify failed:", err));
+               const summaryText = approvedReceipts.map(r => ` ${r.name}: ฿${(Number(r.amount)||0).toLocaleString()}`).join('\n');
+               notifyLine(` ปิดยอดบัญชีเรียบร้อย\nADV: ${parent.advanceId}\nสรุป:\n${summaryText}`).catch(err => console.warn("LINE Notify failed:", err));
                if (selectedWithdrawal?.id === parent.id) {
                  setSelectedWithdrawal({...parent, accountStatus: 'closed', finalApprovedTotal: totalApproved, accountingConclusion: statusLabel, closedAt: new Date().toISOString()});
                }
@@ -1654,7 +1788,7 @@ export default function App() {
           const summary = deletedInfo.length > 5 
             ? `${deletedInfo.slice(0, 5).join(', ')}... และอีก ${deletedInfo.length - 5} รายการ`
             : deletedInfo.join('\n');
-          notifyLine(`🗑️ บัญชีลบรายการเบิก (${deletedInfo.length} รายการ)\n${summary}`).catch(err => console.warn("LINE Notify failed:", err));
+          notifyLine(` บัญชีลบรายการเบิก (${deletedInfo.length} รายการ)\n${summary}`).catch(err => console.warn("LINE Notify failed:", err));
         }
 
         if (successCount === 0 && ids.length > 0) {
@@ -1673,6 +1807,7 @@ export default function App() {
         setShowPassModal({ show: false, action: null, targetId: null, targetIds: [], type: '', receiptIndex: null, receiptIndices: [], nextDocStatus: '' }); 
         setPassword('');
         setPassError('');
+        setSelectedApproverLineId('');
       }
     } else {
       setPassError("รหัสผ่านไม่ถูกต้อง");
@@ -1688,10 +1823,10 @@ export default function App() {
       const deadline = w.clearanceDeadline ? new Date(w.clearanceDeadline).getTime() : (created + 30 * 24 * 60 * 60 * 1000);
       const remainingDays = Math.ceil((deadline - new Date().getTime()) / (1000 * 60 * 60 * 24));
       const statusText = remainingDays < 0 ? `เกินกำหนด ${Math.abs(remainingDays)} วัน` : `เหลือเวลา ${remainingDays} วัน`;
-      return `• ${w.advanceId} [${w.employeeName}]\n  ค้าง: ฿${w.balance.toLocaleString()} / ฿${w.totalAmount.toLocaleString()}\n  ${statusText} (ครบกำหนด: ${new Date(deadline).toLocaleDateString('th-TH')})`;
+      return ` ${w.advanceId} [${w.employeeName}]\n  ค้าง: ฿${w.balance.toLocaleString()} / ฿${w.totalAmount.toLocaleString()}\n  ${statusText} (ครบกำหนด: ${new Date(deadline).toLocaleDateString('th-TH')})`;
     }).join('\n\n');
     
-    await notifyLine(`📊 สรุปรายการค้างเคลียร์ประจำวัน\nณ วันที่: ${new Date().toLocaleDateString('th-TH')}\nจำนวน: ${pending.length} รายการ\n\n${summary}`);
+    await notifyLine(` สรุปรายการค้างเคลียร์ประจำวัน\nณ วันที่: ${new Date().toLocaleDateString('th-TH')}\nจำนวน: ${pending.length} รายการ\n\n${summary}`);
     alert("ส่งสรุปประจำวันเข้า LINE แล้ว");
   };
 
@@ -1700,8 +1835,8 @@ export default function App() {
     const summaryFlex = buildWeeklySummaryFlex(withdrawals);
     const carouselFlex = buildWeeklyCarouselFlex(withdrawals, appUrl);
     
-    await notifyLine("📊 Weekly Advance Summary", 'flex', summaryFlex);
-    await notifyLine("📋 Weekly Detailed Report", 'flex', carouselFlex);
+    await notifyLine(" Weekly Advance Summary", 'flex', summaryFlex);
+    await notifyLine(" Weekly Detailed Report", 'flex', carouselFlex);
     
     alert("ส่งรายงานรายสัปดาห์ (2 ข้อความ) เข้า LINE แล้ว");
   };
@@ -1710,15 +1845,28 @@ export default function App() {
     if (!selectedWithdrawal || !selectedWithdrawal.id) return;
     try {
       const ref = doc(db, `artifacts/${appId}/public/data/withdrawals/${selectedWithdrawal.id}`);
-      await updateDoc(ref, { clearanceDeadline: dateStr });
+      await updateDoc(ref, cleanData({ clearanceDeadline: dateStr }));
       setSelectedWithdrawal({ ...selectedWithdrawal, clearanceDeadline: dateStr });
-      const flex = buildStatusFlex("📅 เลื่อนกำหนดเคลียร์", `ADV: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nกำหนดใหม่: ${new Date(dateStr).toLocaleDateString('th-TH')}`, "#F59E0B", "⏳");
+      const flex = buildStatusFlex(" เลื่อนกำหนดเคลียร์", `ADV: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nกำหนดใหม่: ${new Date(dateStr).toLocaleDateString('th-TH')}`, "#F59E0B", "");
       notifyLine("เลื่อนวันครบกำหนด", 'flex', flex);
     } catch (e) { handleFirestoreError(e, OperationType.UPDATE, `withdrawals/${selectedWithdrawal.id}`); }
   };
 
   const handleSettingsLogin = () => {
     if (settingsPassword === systemConfigs.accPin || settingsPassword === systemConfigs.execPin) {
+      // Initialize staffEditList for management
+      const initialList = dynamicEmployees.map(emp => {
+        const banks = employeeBankAccounts[emp] || [];
+        const mainBank = banks[0] || {};
+        return {
+           nickname: emp,
+           bank: mainBank.bankName || '',
+           accountNumber: mainBank.accountNumber || '',
+           accountName: mainBank.accountName || '',
+           id: Math.random().toString(36).substring(2, 9)
+        };
+      });
+      setStaffEditList(initialList);
       setIsSettingsAuthed(true); setShowSettingsLogin(false); setActiveTab('settings'); setSettingsPassword('');
     } else { alert("รหัสผ่านไม่ถูกต้อง เฉพาะบัญชีและผู้บริหารเท่านั้น"); }
   };
@@ -1956,18 +2104,24 @@ export default function App() {
 
                 <div className="space-y-3">
                   {newReq.items.map((it, idx) => (
-                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border space-y-2 relative">
+                    <div key={idx} className="bg-slate-50 p-3 rounded-xl border space-y-2 relative animate-in slide-in-from-right-2">
                       <div className="grid grid-cols-1 gap-2">
-                        <select className="bg-white border rounded-lg px-2 py-1.5 text-[10px] font-bold" value={it.category} onChange={e => { const ni = [...newReq.items]; ni[idx].category = e.target.value; setNewReq({...newReq, items: ni}); }}><option value="">-- หมวดหมู่ค่าใช้จ่าย --</option>{dynamicCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                        <select className="bg-white border rounded-lg px-2 py-1.5 text-[10px] font-bold outline-none ring-blue-500/10 focus:ring-2" value={it.category} onChange={e => { const ni = [...newReq.items]; ni[idx].category = e.target.value; setNewReq({...newReq, items: ni}); }}><option value="">-- หมวดหมู่ค่าใช้จ่าย --</option>{dynamicCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                       </div>
                       <div className="flex gap-2">
-                        <input className="flex-1 bg-white border rounded-lg px-3 py-1.5 text-[11px]" placeholder="ระบุรายการ..." value={it.name} onChange={e => { const ni = [...newReq.items]; ni[idx].name = e.target.value; setNewReq({...newReq, items: ni}); }} />
-                        <input type="number" className="w-20 bg-white border rounded-lg px-2 py-1.5 text-xs font-black text-right" value={it.amount || ''} onChange={e => { const ni = [...newReq.items]; ni[idx].amount = Number(e.target.value); setNewReq({...newReq, items: ni}); }} />
-                        {newReq.items.length > 1 && <button onClick={() => setNewReq({...newReq, items: newReq.items.filter((_, i) => i !== idx)})} className="text-rose-400 px-2"><Trash2 className="w-4 h-4"/></button>}
+                        <input className="flex-1 bg-white border rounded-lg px-3 py-1.5 text-[11px] font-bold outline-none ring-blue-500/10 focus:ring-2" placeholder="ระบุรายการ..." value={it.name} onChange={e => { const ni = [...newReq.items]; ni[idx].name = e.target.value; setNewReq({...newReq, items: ni}); }} />
+                        <div className="relative">
+                           <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-300 text-[10px]">฿</span>
+                           <input type="number" className="w-24 bg-white border rounded-lg pl-5 pr-2 py-1.5 text-xs font-black text-right outline-none ring-blue-500/10 focus:ring-2" value={it.amount || ''} onChange={e => { const ni = [...newReq.items]; ni[idx].amount = Number(e.target.value); setNewReq({...newReq, items: ni}); }} />
+                        </div>
+                        {newReq.items.length > 1 && <button onClick={() => setNewReq({...newReq, items: newReq.items.filter((_, i) => i !== idx)})} className="text-rose-400 hover:text-rose-600 transition-colors px-1"><Trash2 className="w-4 h-4"/></button>}
                       </div>
                     </div>
                   ))}
-                  <button onClick={() => setNewReq({...newReq, items: [...newReq.items, {name:'', amount:0, category: ''}]})} className="w-full py-1.5 text-blue-600 font-bold text-[9px] uppercase border border-dashed border-blue-100 rounded-xl">+ เพิ่มแถว</button>
+                  <button onClick={() => {
+                    const lastProj = newReq.items[newReq.items.length - 1]?.projectId || (newReq.projectIds.length === 1 ? newReq.projectIds[0] : '');
+                    setNewReq({...newReq, items: [...newReq.items, {name:'', amount:0, category: '', projectId: lastProj}]});
+                  }} className="w-full py-2 text-blue-600 font-black text-[9px] uppercase border border-dashed border-blue-200 rounded-xl hover:bg-blue-50 transition-colors">+ เพิ่มรายการ</button>
                 </div>
                 <button onClick={handleRequestSubmit} disabled={isBusy} className="w-full bg-[#0F172A] text-white py-3 rounded-xl font-black shadow-lg uppercase text-xs active:scale-95 transition-all">ส่งคำขอเบิกเงิน</button>
               </div>
@@ -2065,7 +2219,7 @@ export default function App() {
                     <div className="flex gap-2">
                       <label className={`flex-1 border-2 border-dashed rounded-xl py-2 text-[10px] font-black flex items-center justify-center gap-2 cursor-pointer transition-all ${r.base64 ? 'border-emerald-400 bg-emerald-50 text-emerald-700' : 'border-slate-300 bg-white text-slate-400'}`}>
                         <input type="file" className="hidden" accept="image/*" onChange={(e) => handleFile(i, e.target.files ? e.target.files[0] : null)} />
-                        {r.isProcessing ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3" />} {r.fileName ? `✓ ${r.fileName}` : 'แนบรูปภาพ'}
+                        {r.isProcessing ? <Loader2 className="w-3 h-3 animate-spin"/> : <ImageIcon className="w-3 h-3" />} {r.fileName ? ` ${r.fileName}` : 'แนบรูปภาพ'}
                       </label>
                       {clrForm.receipts.length > 1 && <button onClick={() => setClrForm({...clrForm, receipts: clrForm.receipts.filter((_, idx) => idx !== i)})} className="text-rose-400 px-2"><Trash2 className="w-4 h-4"/></button>}
                     </div>
@@ -2171,9 +2325,17 @@ export default function App() {
                 ))}
                 <button onClick={() => setClrForm({...clrForm, receipts: [...clrForm.receipts, {name:'', amount:0, base64: '', fileName: '', isProcessing: false, projectId: '', description: '', originalAmount: 0, additionalDocs: []}]})} className="w-full py-1.5 text-blue-600 font-bold text-[9px] uppercase border border-dashed border-blue-100 rounded-xl">+ เพิ่มสลิป</button>
               </div>
-              <button onClick={runAI} disabled={isBusy || !clrForm.advanceId || clrForm.receipts.every(r => !r.base64)} className="w-full bg-[#0F172A] text-white py-3 rounded-xl font-black shadow-lg uppercase text-xs tracking-widest flex items-center justify-center gap-2 active:scale-95 disabled:opacity-30">
-                {isBusy ? <Loader2 className="w-4 h-4 animate-spin"/> : <ScanLine className="w-4 h-4"/>} สแกน AI และสรุปยอด
-              </button>
+              <div className="flex gap-2">
+                <button onClick={runAI} disabled={isBusy || !clrForm.advanceId || clrForm.receipts.every(r => !r.base64)} className="flex-1 bg-[#0F172A] text-white py-3 rounded-xl font-black shadow-lg uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 active:scale-95 disabled:opacity-30">
+                  {isBusy ? <Loader2 className="w-4 h-4 animate-spin"/> : <ScanLine className="w-4 h-4"/>} สแกน AI และสรุปยอด
+                </button>
+                <button onClick={() => {
+                   const total = clrForm.receipts.reduce((s, r) => s + Number(r.amount || 0), 0);
+                   setOcrModal({ show: true, total });
+                }} disabled={isBusy || !clrForm.advanceId || clrForm.receipts.length === 0} className="px-6 bg-blue-600 text-white py-3 rounded-xl font-black shadow-lg uppercase text-[10px] tracking-widest flex items-center justify-center gap-2 active:scale-95 disabled:opacity-30">
+                  <CheckCircle2 className="w-4 h-4"/> บันทึกยอดคีย์เอง
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -2525,7 +2687,7 @@ export default function App() {
                         <p className="text-[11px] font-black text-slate-900 truncate leading-tight uppercase">{r.name || r.description}</p>
                         <p className="text-[8px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-1.5 mt-1">
                            <span className="text-blue-500 font-black">{r.projectId}</span> 
-                           <span className="opacity-30">•</span> 
+                           <span className="opacity-30"></span> 
                            <User className="w-2.5 h-2.5" /> {r.employee}
                         </p>
                       </div>
@@ -2577,7 +2739,7 @@ export default function App() {
 
         {/* TAB 6: Settings */}
         {activeTab === 'settings' && isSettingsAuthed && (
-          <div className="space-y-6 animate-in slide-in-from-bottom-5 max-w-2xl mx-auto pb-10">
+          <div className="space-y-6 animate-in slide-in-from-bottom-5 max-w-5xl mx-auto pb-10">
              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
@@ -2769,31 +2931,33 @@ export default function App() {
                 
                 <button onClick={resetToDefaultProjects} className="w-full py-2.5 bg-blue-50 text-blue-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all border border-blue-100">Reset to Default List (46 Projects)</button>
                 
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-[80vh] overflow-y-auto pr-2 custom-scrollbar pb-10">
-                  {dynamicProjects.filter(p => !settingsProjSearch || p.toLowerCase().includes(settingsProjSearch.toLowerCase())).sort().map((p, i) => (
-                    <div 
-                      key={p} 
-                      onClick={() => setSelectedProjectItems(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
-                      className={`flex justify-between items-center px-4 py-3 rounded-2xl text-[10px] font-bold transition-all cursor-pointer border ${
-                        selectedProjectItems.includes(p) 
-                        ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' 
-                        : 'bg-slate-50/50 hover:bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 truncate">
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0 ${selectedProjectItems.includes(p) ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white border-slate-200'}`}>
-                          {selectedProjectItems.includes(p) && <CheckCircle2 className="w-3 h-3" />}
-                        </div>
-                        <span className="truncate">{p}</span>
-                      </div>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); removeProject(p); }} 
-                        className={`transition-colors p-1 flex-shrink-0 ${selectedProjectItems.includes(p) ? 'text-blue-400 hover:text-rose-500' : 'text-slate-300 hover:text-rose-500'}`}
+                <div className="flex flex-col gap-2 max-h-[80vh] overflow-y-auto pr-2 custom-scrollbar pb-10">
+                  <div className="grid grid-cols-1 gap-2">
+                    {dynamicProjects.filter(p => !settingsProjSearch || p.toLowerCase().includes(settingsProjSearch.toLowerCase())).sort().map((p) => (
+                      <div 
+                        key={p} 
+                        onClick={() => setSelectedProjectItems(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
+                        className={`flex justify-between items-center px-4 py-3 rounded-xl text-[12px] font-bold transition-all cursor-pointer border ${
+                          selectedProjectItems.includes(p) 
+                          ? 'bg-blue-600 text-white border-blue-600 shadow-md' 
+                          : 'bg-white hover:bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-200 shadow-sm'
+                        }`}
                       >
-                        <X className="w-3.5 h-3.5"/>
-                      </button>
-                    </div>
-                  ))}
+                        <div className="flex items-center gap-4 min-w-0 flex-1">
+                          <div className={`w-5 h-5 rounded-md border flex items-center justify-center transition-all flex-shrink-0 ${selectedProjectItems.includes(p) ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white border-slate-200'}`}>
+                            {selectedProjectItems.includes(p) && <CheckCircle2 className="w-3.5 h-3.5" />}
+                          </div>
+                          <span className="leading-relaxed break-all pr-4">{p}</span>
+                        </div>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); removeProject(p); }} 
+                          className={`transition-colors p-2 flex-shrink-0 rounded-lg hover:bg-white/10 ${selectedProjectItems.includes(p) ? 'text-blue-100 hover:text-white' : 'text-slate-300 hover:text-rose-500'}`}
+                        >
+                          <X className="w-4 h-4"/>
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
 
@@ -2912,11 +3076,11 @@ export default function App() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                 <div className="space-y-2">
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-1">Approver (Admin)</label>
-                  <input type="password" value={systemConfigs.execPin} onChange={e => setSystemConfigs({...systemConfigs, execPin: e.target.value})} className="w-full bg-slate-50 border-none rounded-2xl px-5 py-3.5 text-center text-xl font-black tracking-[0.4em] outline-none" placeholder="••••" />
+                  <input type="password" value={systemConfigs.execPin} onChange={e => setSystemConfigs({...systemConfigs, execPin: e.target.value})} className="w-full bg-slate-50 border-none rounded-2xl px-5 py-3.5 text-center text-xl font-black tracking-[0.4em] outline-none" placeholder="" />
                 </div>
                 <div className="space-y-2">
                   <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-1">Accountant (Clearing)</label>
-                  <input type="password" value={systemConfigs.accPin} onChange={e => setSystemConfigs({...systemConfigs, accPin: e.target.value})} className="w-full bg-slate-50 border-none rounded-2xl px-5 py-3.5 text-center text-xl font-black tracking-[0.4em] outline-none" placeholder="••••" />
+                  <input type="password" value={systemConfigs.accPin} onChange={e => setSystemConfigs({...systemConfigs, accPin: e.target.value})} className="w-full bg-slate-50 border-none rounded-2xl px-5 py-3.5 text-center text-xl font-black tracking-[0.4em] outline-none" placeholder="" />
                 </div>
               </div>
 
@@ -2969,7 +3133,7 @@ export default function App() {
                 </div>
                 <div className="p-4 bg-blue-50 rounded-2xl border border-blue-100">
                   <p className="text-[8px] font-bold text-blue-700 leading-relaxed">
-                    💡 <span className="font-black">วิธีใช้งานสำหรับฝ่ายบัญชี:</span> ระบบจะแยกข้อมูลเข้า 2 แผ่นงานอัตโนมัติ คือ <span className="font-black">"Advances"</span> (เมื่ออนุมัติ) และ <span className="font-black">"Clearance"</span> (เมื่อเคลียร์ยอด) 
+                     <span className="font-black">วิธีใช้งานสำหรับฝ่ายบัญชี:</span> ระบบจะแยกข้อมูลเข้า 2 แผ่นงานอัตโนมัติ คือ <span className="font-black">"Advances"</span> (เมื่ออนุมัติ) และ <span className="font-black">"Clearance"</span> (เมื่อเคลียร์ยอด) 
                     <br/>กรุณาสร้างแผ่นงาน Google Sheets ให้มีชื่อตรงกันทั้ง 2 หน้าก่อนนำ Webhook มาใส่
                   </p>
                 </div>
@@ -2990,14 +3154,14 @@ export default function App() {
                     <p className="text-[8px] font-bold text-slate-400 uppercase tracking-widest mt-0.5">สถานะ: ระบบรองรับ Flex Message & Postback</p>
                   </div>
                   <button onClick={() => {
-                    const flex = buildStatusFlex("🧪 Test System", "การแจ้งเตือนผ่าน LINE Bot ทำงานปกติ!", "#0F172A", "✅");
+                    const flex = buildStatusFlex(" Test System", "การแจ้งเตือนผ่าน LINE Bot ทำงานปกติ!", "#0F172A", "");
                     notifyLine("Test Connection", 'flex', flex);
                   }} className="bg-white border border-slate-200 text-slate-900 px-4 py-2 rounded-xl font-black text-[9px] uppercase tracking-widest hover:bg-slate-100 active:scale-95 transition-all shadow-sm">Test Bot</button>
                 </div>
 
                 <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-100 space-y-3">
                   <p className="text-[8px] font-bold text-emerald-800 leading-relaxed">
-                    ⚙️ <span className="font-black">ขั้นตอนการเชื่อมต่อ LINE BOT:</span>
+                     <span className="font-black">ขั้นตอนการเชื่อมต่อ LINE BOT:</span>
                     <br/>1. นำ Webhook URL ด้านล่างไปใส่ใน LINE Developers Console
                     <br/>2. ตั้งค่า Environment Variables: <span className="font-mono bg-white/50 px-1">LINE_CHANNEL_ACCESS_TOKEN</span> และ <span className="font-mono bg-white/50 px-1">LINE_DESTINATION_ID</span>
                     <br/>3. ตั้งค่า <span className="font-mono bg-white/50 px-1">FIREBASE_SERVICE_ACCOUNT</span> เพื่อกดอนุมัติผ่าน LINE ได้ทันที
@@ -3051,7 +3215,7 @@ export default function App() {
                           className="bg-slate-900 text-white px-5 rounded-2xl font-black text-[9px] uppercase tracking-widest active:scale-95 transition-all shadow-lg"
                         >Add</button>
                       </div>
-                      <p className="text-[8px] text-blue-500 font-bold px-1 italic uppercase">💡 วิธีหา ID: ให้ผู้อนุมัติพิมพ์คำว่า "id" ในช่องแชทหาบอท เพื่อดูรหัสของตัวเอง</p>
+                      <p className="text-[8px] text-blue-500 font-bold px-1 italic uppercase"> วิธีหา ID: ให้ผู้อนุมัติพิมพ์คำว่า "id" ในช่องแชทหาบอท เพื่อดูรหัสของตัวเอง</p>
                     </div>
                   </div>
                   
@@ -3195,7 +3359,7 @@ export default function App() {
         <div className="fixed inset-0 bg-[#0F172A]/98 backdrop-blur-2xl z-[500] flex items-center justify-center p-6">
           <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-10 shadow-2xl border-t-8 border-slate-900 animate-in zoom-in-95">
             <h3 className="text-2xl font-black mb-1 text-center text-slate-900 uppercase">Admin Access</h3>
-            <input type="password" autoFocus value={settingsPassword} onChange={(e) => setSettingsPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSettingsLogin()} placeholder="••••••" className="w-full bg-slate-50 border-none rounded-xl px-6 py-5 text-center text-4xl tracking-[0.4em] outline-none mb-8 font-black" />
+            <input type="password" autoFocus value={settingsPassword} onChange={(e) => setSettingsPassword(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleSettingsLogin()} placeholder="" className="w-full bg-slate-50 border-none rounded-xl px-6 py-5 text-center text-4xl tracking-[0.4em] outline-none mb-8 font-black" />
             <div className="flex gap-4">
               <button onClick={() => setShowSettingsLogin(false)} className="flex-1 py-4 text-slate-400 font-black text-[10px] uppercase">ยกเลิก</button>
               <button onClick={handleSettingsLogin} className="flex-1 bg-[#111827] text-white py-4 rounded-xl font-black text-[10px] uppercase shadow-xl">ยืนยัน</button>
@@ -3213,7 +3377,18 @@ export default function App() {
                 {clrForm.receipts.map((r, i) => (
                   <div key={i} className={`p-4 rounded-3xl border transition-all ${r.isDuplicate ? 'bg-rose-50 border-rose-100' : 'bg-slate-50 border-slate-100'}`}>
                     <div className="flex justify-between items-start mb-2">
-                       <span className="text-[9px] font-black uppercase text-slate-400 px-2 bg-white rounded-full border">{r.projectId || 'N/A'}</span>
+                       <select 
+                         className="text-[9px] font-black uppercase text-blue-600 px-2 py-1 bg-white rounded-full border outline-none focus:ring-1 ring-blue-500/20"
+                         value={r.projectId}
+                         onChange={e => {
+                           const nr = [...clrForm.receipts];
+                           nr[i].projectId = e.target.value;
+                           setClrForm({...clrForm, receipts: nr});
+                         }}
+                       >
+                         <option value="">-- เลือกโปรเจกต์ --</option>
+                         {dynamicProjects.map(p => <option key={p} value={p}>{p}</option>)}
+                       </select>
                        {r.isDuplicate && (
                          <div className="bg-rose-500 text-white text-[8px] font-black py-0.5 px-2 rounded-full animate-pulse flex items-center gap-1">
                            <AlertTriangle className="w-2.5 h-2.5" /> 
@@ -3433,7 +3608,7 @@ export default function App() {
                            </div>
 
                            <div className="space-y-2 pt-4 border-t border-emerald-200 border-dashed">
-                              <p className="text-[10px] font-black text-emerald-800 uppercase tracking-widest mb-2">📊 สรุปยอดจ่ายจริงตามโปรเจกต์:</p>
+                              <p className="text-[10px] font-black text-emerald-800 uppercase tracking-widest mb-2"> สรุปยอดจ่ายจริงตามโปรเจกต์:</p>
                               {Object.entries(
                                 (selectedWithdrawal.receipts || [])
                                   .filter(r => r.docStatus === 'approved')
@@ -3648,15 +3823,32 @@ export default function App() {
               value={password} 
               onChange={(e) => { setPassword(e.target.value); setPassError(''); }} 
               onKeyDown={(e) => e.key === 'Enter' && !isBusy && verifyAction()} 
-              placeholder="••••••" 
+              placeholder="" 
               disabled={isBusy}
               className={`w-full bg-slate-50 border-2 ${passError ? 'border-rose-500' : 'border-transparent'} rounded-xl px-6 py-5 text-center text-4xl tracking-[0.4em] mb-4 font-black transition-all outline-none focus:bg-white focus:border-blue-200 disabled:opacity-50`} 
             />
+
+            {(showPassModal.action === 'approve' || (showPassModal.action === 'doc_toggle' && showPassModal.nextDocStatus === 'approved')) && (
+               <div className="mb-6 space-y-2">
+                 <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest text-center">ต้องเลือกระบุผู้อนุมัติ</p>
+                 <select 
+                   value={selectedApproverLineId} 
+                   onChange={(e) => setSelectedApproverLineId(e.target.value)}
+                   className="w-full bg-slate-50 border-none rounded-xl px-4 py-4 text-xs font-bold outline-none ring-2 ring-transparent focus:ring-blue-500/10 appearance-none"
+                 >
+                   <option value="">-- เลือกผู้อนุมัติ --</option>
+                   {(systemConfigs.approvers || []).map(a => (
+                     <option key={a.lineId} value={a.lineId}>{a.name}</option>
+                   ))}
+                 </select>
+               </div>
+            )}
+
             {passError && <p className="text-rose-500 text-[10px] font-bold text-center mb-6 animate-bounce">{passError}</p>}
             
             <div className="flex gap-4">
               <button 
-                onClick={() => { setShowPassModal({ show: false, action: null, targetId: null, targetIds: [], type: '', receiptIndex: null, receiptIndices: [], nextDocStatus: '' }); setPassword(''); setPassError(''); }} 
+                onClick={() => { setShowPassModal({ show: false, action: null, targetId: null, targetIds: [], type: '', receiptIndex: null, receiptIndices: [], nextDocStatus: '' }); setPassword(''); setPassError(''); setSelectedApproverLineId(''); }} 
                 className="flex-1 py-3.5 text-slate-400 font-black text-[10px] uppercase hover:text-slate-600 transition-colors"
                 disabled={isBusy}
               >

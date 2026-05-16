@@ -47,6 +47,8 @@ export interface Receipt {
   additionalDocs?: Array<{ base64: string; fileName: string; driveUrl?: string }>;
   isEdited?: boolean;
   docStatus?: 'waiting' | 'approved' | 'rejected';
+  approvedBy?: string;
+  approvedByName?: string;
 }
 
 export interface Withdrawal {
@@ -69,6 +71,7 @@ export interface Withdrawal {
     name: string;
     amount: number;
     category: string;
+    projectId?: string;
   }>;
   receipts: Receipt[];
   accountStatus?: 'open' | 'closed';

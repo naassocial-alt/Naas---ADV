@@ -25,21 +25,44 @@ const initAdmin = () => {
   try {
     if (!admin.apps.length) {
       const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-      if (sa) {
-        const config = JSON.parse(sa);
-        admin.initializeApp({ credential: admin.credential.cert(config) });
+      if (sa && sa.trim().startsWith("{")) {
+        try {
+          const config = JSON.parse(sa);
+          admin.initializeApp({
+            credential: admin.credential.cert(config)
+          });
+        } catch (e) {
+          console.error("Invalid FIREBASE_SERVICE_ACCOUNT JSON:", e);
+          admin.initializeApp();
+        }
       } else {
-        // Fallback to config file info for project ID
+        // Safe default: try application default credentials if in GCP, else just projectId
+        // This avoids the 16 UNAUTHENTICATED error in most hosting environments
         try {
           const configPath = path.join(process.cwd(), "firebase-applet-config.json");
           if (fs.existsSync(configPath)) {
             const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-            admin.initializeApp({ projectId: config.projectId });
+            console.log(`[Firebase Admin] Initializing with Project ID: ${config.projectId}`);
+            admin.initializeApp({
+              projectId: config.projectId,
+              credential: admin.credential.applicationDefault()
+            });
           } else {
-            admin.initializeApp();
+            admin.initializeApp({
+              credential: admin.credential.applicationDefault()
+            });
           }
         } catch (e) {
-          admin.initializeApp();
+          // If applicationDefault() fails
+          try {
+            const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+            const projectId = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")).projectId : undefined;
+            console.log(`[Firebase Admin] Fallback to basic Project ID: ${projectId}`);
+            admin.initializeApp({ projectId });
+          } catch (e2) {
+            console.error("[Firebase Admin] Final fallback failed", e2);
+            admin.initializeApp();
+          }
         }
       }
     }
@@ -57,6 +80,7 @@ const initAdmin = () => {
     } catch (e) { /* ignore */ }
 
     db = databaseId ? getFirestore(databaseId) : getFirestore();
+    db.settings({ ignoreUndefinedProperties: true });
     return db;
   } catch (err) {
     if (!authFailed) {
@@ -89,28 +113,42 @@ async function startServer() {
 
   // Health check
   app.get("/api/health", (req, res) => {
-    console.log("Health check hit");
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
   // Helpers for usage tracking
   const incrementUsage = async (field: "ocrCount" | "lineCount" | "requestCount") => {
     if (authFailed) return;
+    
+    // If no service account and explicitly checking for requestCount (heartbeat), 
+    // we can skip trying if we've already seen failures or if we know we're in a restricted dev env
+    if (field === "requestCount" && !process.env.FIREBASE_SERVICE_ACCOUNT && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+      // We'll try once, but if it fails we stop.
+    }
+
     const firestore = initAdmin();
-    if (!firestore) return;
+    if (!firestore) {
+      if (field !== "requestCount") console.warn(`Firebase Admin not initialized. Skipping ${field} tracking.`);
+      return;
+    }
+
     const appId = process.env.APP_ID || "advance-system-v3";
     const usageRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/usage`);
+    
     try {
       await usageRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
     } catch (err: any) {
-      // If we get an unauthenticated error, stop trying to avoid spamming logs
-      if (err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"))) {
+      // If we get an unauthenticated error (16), stop trying to avoid spamming logs
+      const isUnauth = err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"));
+      if (isUnauth) {
         if (!authFailed) {
-          console.error(`Firebase Auth failed for ${field}. Usage tracking disabled.`, err.message);
+          // Log only once per server lifetime
+          console.info(`[Usage Tracking] Not authenticated for ${field}. Disabling tracking to save resources.`);
           authFailed = true;
         }
       } else {
-        console.error(`Error incrementing ${field}:`, err);
+        // For other errors (permission denied, etc), log but maybe don't kill everything unless it's a pattern
+        console.warn(`[Usage Tracking] Error incrementing ${field}:`, err.message || err);
       }
     }
   };
@@ -349,6 +387,136 @@ async function startServer() {
     };
 
     const createResultFlex = (title: string, color: string, data: any, statusLabel: string, deadline?: string, buttonConfig?: { label: string, url: string }) => {
+      const bodyContents: any[] = [
+        {
+          type: "box",
+          layout: "horizontal",
+          contents: [
+            {
+              type: "text",
+              text: "สถานะ",
+              size: "xs",
+              color: "#64748B",
+              flex: 1
+            },
+            {
+              type: "text",
+              text: statusLabel,
+              size: "xs",
+              color: color,
+              weight: "bold",
+              flex: 3,
+              align: "end"
+            }
+          ]
+        },
+        {
+          type: "separator",
+          margin: "md"
+        },
+        {
+          type: "box",
+          layout: "vertical",
+          spacing: "sm",
+          contents: [
+            {
+              type: "box",
+              layout: "horizontal",
+              contents: [
+                { type: "text", text: "ID", size: "xxs", color: "#94A3B8", flex: 1 },
+                { type: "text", text: data.advanceId || "-", size: "xxs", color: "#1E293B", flex: 3, align: "end", weight: "bold" }
+              ]
+            },
+            {
+              type: "box",
+              layout: "horizontal",
+              contents: [
+                { type: "text", text: "พนักงาน", size: "xxs", color: "#94A3B8", flex: 1 },
+                { type: "text", text: data.employeeName || "-", size: "xxs", color: "#1E293B", flex: 3, align: "end" }
+              ]
+            },
+            {
+              type: "box",
+              layout: "horizontal",
+              contents: [
+                { type: "text", text: "ยอดเงิน", size: "xxs", color: "#94A3B8", flex: 1 },
+                { type: "text", text: `฿${(data.totalAmount || 0).toLocaleString()}`, size: "xxs", color: "#1E293B", flex: 3, align: "end", weight: "bold" }
+              ]
+            },
+            deadline ? {
+              type: "box",
+              layout: "horizontal",
+              contents: [
+                { type: "text", text: "กำหนดเคลียร์", size: "xxs", color: "#94A3B8", flex: 1 },
+                { type: "text", text: new Date(deadline).toLocaleDateString("th-TH"), size: "xxs", color: "#EF4444", flex: 3, align: "end", weight: "bold" }
+              ]
+            } : { type: "spacer", size: "xs" }
+          ]
+        }
+      ];
+
+      // Add Items
+      if (data.items && data.items.length > 0) {
+        bodyContents.push({ type: "separator", margin: "md" });
+        bodyContents.push({
+          type: "box",
+          layout: "vertical",
+          margin: "md",
+          spacing: "xs",
+          contents: data.items.map((it: any) => ({
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              { type: "text", text: `• ${it.name}`, size: "xxs", color: "#475569", flex: 7 },
+              { type: "text", text: `฿${(Number(it.amount) || 0).toLocaleString()}`, size: "xxs", color: "#1e293b", weight: "bold", flex: 3, align: "end" }
+            ]
+          }))
+        });
+      }
+
+      // Add Bank Info
+      if (data.bankAccount) {
+        bodyContents.push({ type: "separator", margin: "md" });
+        bodyContents.push({
+          type: "box",
+          layout: "vertical",
+          margin: "md",
+          paddingAll: "sm",
+          backgroundColor: "#F1F5F9",
+          cornerRadius: "md",
+          contents: [
+            { type: "text", text: "💰 ข้อมูลบัญชีสำหรับโอนเงิน", size: "xxs", color: "#475569", weight: "bold" },
+            { 
+              type: "box", 
+              layout: "horizontal", 
+              margin: "sm",
+              contents: [
+                { type: "text", text: "ธนาคาร", size: "xxs", color: "#64748B", flex: 2 },
+                { type: "text", text: data.bankAccount.bankName || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
+              ] 
+            },
+            { 
+              type: "box", 
+              layout: "horizontal", 
+              margin: "xs",
+              contents: [
+                { type: "text", text: "เลขบัญชี", size: "xxs", color: "#64748B", flex: 2 },
+                { type: "text", text: data.bankAccount.accountNumber || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
+              ] 
+            },
+            { 
+              type: "box", 
+              layout: "horizontal", 
+              margin: "xs",
+              contents: [
+                { type: "text", text: "ชื่อบัญชี", size: "xxs", color: "#64748B", flex: 2 },
+                { type: "text", text: data.bankAccount.accountName || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
+              ] 
+            }
+          ]
+        });
+      }
+
       const bubble: any = {
         type: "bubble",
         size: "mega",
@@ -377,93 +545,59 @@ async function startServer() {
           type: "box",
           layout: "vertical",
           spacing: "md",
-          contents: [
-            {
-              type: "box",
-              layout: "horizontal",
-              contents: [
-                {
-                  type: "text",
-                  text: "สถานะ",
-                  size: "xs",
-                  color: "#64748B",
-                  flex: 1
-                },
-                {
-                  type: "text",
-                  text: statusLabel,
-                  size: "xs",
-                  color: color,
-                  weight: "bold",
-                  flex: 3,
-                  align: "end"
-                }
-              ]
-            },
-            {
-              type: "separator",
-              margin: "md"
-            },
-            {
-              type: "box",
-              layout: "vertical",
-              spacing: "sm",
-              contents: [
-                {
-                  type: "box",
-                  layout: "horizontal",
-                  contents: [
-                    { type: "text", text: "ID", size: "xxs", color: "#94A3B8", flex: 1 },
-                    { type: "text", text: data.advanceId || "-", size: "xxs", color: "#1E293B", flex: 3, align: "end", weight: "bold" }
-                  ]
-                },
-                {
-                  type: "box",
-                  layout: "horizontal",
-                  contents: [
-                    { type: "text", text: "พนักงาน", size: "xxs", color: "#94A3B8", flex: 1 },
-                    { type: "text", text: data.employeeName || "-", size: "xxs", color: "#1E293B", flex: 3, align: "end" }
-                  ]
-                },
-                {
-                  type: "box",
-                  layout: "horizontal",
-                  contents: [
-                    { type: "text", text: "ยอดเงิน", size: "xxs", color: "#94A3B8", flex: 1 },
-                    { type: "text", text: `฿${(data.totalAmount || 0).toLocaleString()}`, size: "xxs", color: "#1E293B", flex: 3, align: "end", weight: "bold" }
-                  ]
-                },
-                deadline ? {
-                  type: "box",
-                  layout: "horizontal",
-                  contents: [
-                    { type: "text", text: "กำหนดเคลียร์", size: "xxs", color: "#94A3B8", flex: 1 },
-                    { type: "text", text: new Date(deadline).toLocaleDateString("th-TH"), size: "xxs", color: "#EF4444", flex: 3, align: "end", weight: "bold" }
-                  ]
-                } : { type: "spacer", size: "xs" }
-              ]
-            }
-          ]
+          contents: bodyContents
         }
       };
 
+      const footerContents: any[] = [];
+      
+      // Copy button if bank exists
+      if (data.bankAccount) {
+        footerContents.push({
+          type: "button",
+          style: "secondary",
+          height: "sm",
+          margin: "sm",
+          action: {
+            type: "clipboard",
+            label: "คัดลอกเลขบัญชี",
+            clipboardText: data.bankAccount.accountNumber.replace(/-/g, '')
+          }
+        });
+        footerContents.push({
+          type: "button",
+          style: "secondary",
+          height: "sm",
+          margin: "xs",
+          action: {
+            type: "clipboard",
+            label: "คัดลอกชื่อบัญชี",
+            clipboardText: data.bankAccount.accountName
+          }
+        });
+      }
+
       if (buttonConfig) {
+        footerContents.push({
+          type: "button",
+          style: "primary",
+          color: color,
+          height: "sm",
+          margin: "md",
+          action: {
+            type: "uri",
+            label: buttonConfig.label,
+            uri: buttonConfig.url
+          }
+        });
+      }
+
+      if (footerContents.length > 0) {
         bubble.footer = {
           type: "box",
           layout: "vertical",
-          contents: [
-            {
-              type: "button",
-              style: "primary",
-              color: color,
-              height: "sm",
-              action: {
-                type: "uri",
-                label: buttonConfig.label,
-                uri: buttonConfig.url
-              }
-            }
-          ]
+          spacing: "xs",
+          contents: footerContents
         };
       }
 
@@ -568,9 +702,9 @@ async function startServer() {
                     color: "#267F8C",
                     height: "sm",
                     action: {
-                      type: "uri",
+                      type: "postback",
                       label: "อนุมัติ",
-                      uri: `${webAppUrl}?approve=${data.id}`
+                      data: `action=approve&id=${data.id}&appId=${appId}`
                     }
                   },
                   {
@@ -579,9 +713,9 @@ async function startServer() {
                     color: "#E53935",
                     height: "sm",
                     action: {
-                      type: "message",
+                      type: "postback",
                       label: "ไม่อนุมัติ",
-                      text: `ไม่อนุมัติ ${data.advanceId}`
+                      data: `action=reject&id=${data.id}&appId=${appId}`
                     }
                   }
                 ]
@@ -658,8 +792,7 @@ async function startServer() {
             if (!isLegacyAuth && !isApproverAuth) {
               if (replyToken) {
                 await replyMessage(replyToken, [
-                  { type: "text", text: "🔒 เฉพาะผู้อนุมัติเท่านั้นที่สามารถใช้คำสั่งนี้ได้" },
-                  { type: "text", text: `ID: ${userId}` }
+                  { type: "text", text: "🔒 คุณไม่มีสิทธิ์ในการกดอนุมัติหรือปฏิเสธ" }
                 ]);
               }
               continue;
@@ -682,11 +815,22 @@ async function startServer() {
             const data = query.docs[0].data();
 
             if (data.status !== "pending") {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `⚠️ รายการนี้ถูกดำเนินการไปแล้ว (${data.status})` }]);
+              const statusLabel = data.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
+              const processedBy = data.approvedByName ? ` โดย ${data.approvedByName}` : '';
+              const message = `⚠️ รายการ ${advId} นี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: message }]);
               continue;
             }
 
-            await docRef.update({ status: "rejected" });
+            const approver = approvers.find((a: any) => a.lineId === userId);
+            const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
+
+            await docRef.update({ 
+              status: "rejected",
+              approvedBy: userId,
+              approvedByName: approverName,
+              rejectedAt: new Date().toISOString()
+            });
             
             // Sync to sheets
             const sheetsUrl = configs.sheetsUrl;
@@ -701,13 +845,14 @@ async function startServer() {
                   projects: (data.projectIds || []).join(", "),
                   approvedAt: new Date().toISOString(),
                   status: "Rejected",
+                  approvedBy: approverName,
                   clearanceDeadline: ""
                 }),
               }).catch(e => console.error("Sheets sync error:", e));
             }
 
             if (replyToken) {
-              const flex = createResultFlex("ผลการปฏิเสธ", "#EF4444", data, "ถูกปฏิเสธแล้ว (ผ่านข้อความ)");
+              const flex = createResultFlex("ผลการปฏิเสธ", "#EF4444", data, `ถูกปฏิเสธแล้ว โดย ${approverName}`);
               await replyMessage(replyToken, [flex]);
             }
           } catch (err) {
@@ -718,6 +863,7 @@ async function startServer() {
       }
 
       if (event.type === "postback") {
+        console.log("[LINE Webhook] Postback received:", event.postback.data);
         try {
           const params = new URLSearchParams(event.postback.data);
           const action = params.get("action");
@@ -726,7 +872,12 @@ async function startServer() {
           const replyToken = event.replyToken;
           const userId = event.source.userId;
           
-          if (!firestore) continue;
+          console.log(`[LINE Webhook] Action: ${action}, ID: ${withdrawId}, AppId: ${appIdFromParams}, User: ${userId}`);
+
+          if (!firestore) {
+            console.error("[LINE Webhook] Firestore not initialized");
+            continue;
+          }
 
           const appId = appIdFromParams || process.env.APP_ID || "advance-system-v3";
           const configsRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
@@ -740,7 +891,7 @@ async function startServer() {
             const isApproverAuth = approvers.some((a: any) => a.lineId === userId);
             
             if (!isLegacyAuth && !isApproverAuth) {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "🔒 คุณไม่มีสิทธิ์สั่งการผ่านเมนูนี้" }]);
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "🔒 คุณไม่มีสิทธิ์ในการกดอนุมัติหรือปฏิเสธ" }]);
               continue;
             }
           }
@@ -748,85 +899,137 @@ async function startServer() {
           if (action && withdrawId) {
             const docPath = `artifacts/${appId}/public/data/withdrawals/${withdrawId}`;
             const docRef = firestore.doc(docPath);
-            const snap = await docRef.get();
+            
+            try {
+              const result = await firestore.runTransaction(async (t) => {
+                const docSnap = await t.get(docRef);
+                if (!docSnap.exists) return { error: "not_found" };
 
-            if (!snap.exists) {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${withdrawId}` }]);
-              continue;
-            }
-
-            const data = snap.data();
-            if (data?.status !== "pending") {
-              if (replyToken) {
-                const flex = createResultFlex("แจ้งเตือนสถานะ", "#F59E0B", data, `รายการนี้ถูกดำเนินการไปแล้ว (${data?.status})`);
-                await replyMessage(replyToken, [flex]);
-              }
-              continue;
-            }
-
-            // Sync to Sheets logic
-            const syncToSheets = async (status: string, deadline?: string) => {
-              const systemConfigRef = firestore?.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
-              const configSnap = await systemConfigRef?.get();
-              const sheetsUrl = configSnap?.data()?.sheetsUrl;
-
-              if (sheetsUrl) {
-                try {
-                  await fetch(sheetsUrl, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                      id: data.advanceId,
-                      employee: data.employeeName,
-                      amount: data.totalAmount,
-                      projects: (data.projectIds || []).join(", "),
-                      approvedAt: new Date().toISOString(),
-                      status: status,
-                      clearanceDeadline: deadline || ""
-                    }),
-                  });
-                } catch (sheetsErr) {
-                  console.error("Sheets sync error in webhook:", sheetsErr);
+                const data = docSnap.data() as any;
+                if (data?.status !== "pending") {
+                  return { alreadyProcessed: true, data };
                 }
-              }
-            };
 
-            if (action === "approve") {
-              const deadline = new Date();
-              deadline.setDate(deadline.getDate() + 30);
-              const deadlineIso = deadline.toISOString();
-              
-              await docRef.update({ 
-                status: "approved", 
-                approvedAt: new Date().toISOString(),
-                clearanceDeadline: deadlineIso
+                const approver = approvers.find((a: any) => a.lineId === userId);
+                const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
+                const now = new Date().toISOString();
+
+                if (action === "approve") {
+                  const deadline = new Date();
+                  deadline.setDate(deadline.getDate() + 30);
+                  const deadlineIso = deadline.toISOString();
+                  
+                  const updateData = { 
+                    status: "approved", 
+                    approvedAt: now,
+                    approvedBy: userId,
+                    approvedByName: approverName,
+                    clearanceDeadline: deadlineIso
+                  };
+                  t.update(docRef, updateData);
+                  return { success: true, action: "approve", data: { ...data, ...updateData }, approverName };
+                } else if (action === "reject") {
+                  const updateData = { 
+                    status: "rejected",
+                    approvedBy: userId,
+                    approvedByName: approverName,
+                    rejectedAt: now
+                  };
+                  t.update(docRef, updateData);
+                  return { success: true, action: "reject", data: { ...data, ...updateData }, approverName };
+                }
+                return { error: "unknown_action" };
               });
 
-              await syncToSheets("Approved", deadlineIso);
+              if (result.error === "not_found") {
+                if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${withdrawId}` }]);
+                continue;
+              }
 
-              if (replyToken) {
-                const appUrl = (configs.webAppUrl || "").replace(/\/$/, "");
-                const flex = createResultFlex(
-                  "ผลการดำเนินการ", 
-                  "#10B981", 
-                  data, 
-                  "ได้รับการอนุมัติแล้ว", 
-                  deadlineIso,
-                  { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${withdrawId}&action=slip` }
-                );
-                await replyMessage(replyToken, [flex]);
+              if (result.alreadyProcessed) {
+                const data = result.data;
+                const statusLabel = data?.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
+                const processedBy = data?.approvedByName ? ` โดย ${data.approvedByName}` : '';
+                
+                if (replyToken) {
+                  const message = `⚠️ รายการนี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
+                  await replyMessage(replyToken, [{ type: "text", text: message }]);
+                }
+                continue;
               }
-            } else if (action === "reject") {
-              await docRef.update({ status: "rejected" });
-              await syncToSheets("Rejected");
-              if (replyToken) {
-                const flex = createResultFlex("ผลการดำเนินการ", "#EF4444", data, "ถูกปฏิเสธแล้ว");
-                await replyMessage(replyToken, [flex]);
+
+              if (result.success) {
+                const data = result.data;
+                const approverName = result.approverName;
+
+                // Sync to Sheets
+                const sheetsUrl = configs.sheetsUrl;
+                if (sheetsUrl) {
+                  try {
+                    await fetch(sheetsUrl, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        id: data.advanceId,
+                        employee: data.employeeName,
+                        amount: data.totalAmount,
+                        projects: (data.projectIds || []).join(", "),
+                        approvedAt: new Date().toISOString(),
+                        status: result.action === "approve" ? "Approved" : "Rejected",
+                        approvedBy: approverName,
+                        clearanceDeadline: data.clearanceDeadline || ""
+                      }),
+                    });
+                  } catch (e) { console.error("Sheets sync error:", e); }
+                }
+
+                if (replyToken) {
+                  const appUrl = (configs.webAppUrl || process.env.PUBLIC_URL || "").replace(/\/$/, "");
+                  
+                  if (result.action === "approve") {
+                    const flex = createResultFlex(
+                      "อนุมัติสำเร็จ", 
+                      "#10B981", 
+                      data, 
+                      `Approved by ${approverName}`, 
+                      data.clearanceDeadline,
+                      appUrl ? { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${withdrawId}&action=slip` } : undefined
+                    );
+                    await replyMessage(replyToken, [flex]);
+                  } else {
+                    const flex = createResultFlex(
+                      "ปฏิเสธสำเร็จ", 
+                      "#EF4444", 
+                      data, 
+                      `Rejected by ${approverName}`
+                    );
+                    await replyMessage(replyToken, [flex]);
+                  }
+                }
               }
+            } catch (err) {
+              console.error("Postback transaction error:", err);
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "❌ เกิดข้อผิดพลาดในการประมวลผล กรุณาลองใหม่อีกครั้ง" }]);
             }
           }
-        } catch (err) {
+        } catch (err: any) {
           console.error("Webhook processing error:", err);
+          // If we have a reply token, try to send the error back to help debugging
+          try {
+            if (event.replyToken) {
+               await fetch("https://api.line.me/v2/bot/message/reply", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
+                },
+                body: JSON.stringify({ 
+                  replyToken: event.replyToken, 
+                  messages: [{ type: "text", text: `❌ Webhook Error: ${err.message}` }] 
+                }),
+              });
+            }
+          } catch (replyErr) { /* ignore */ }
         }
       }
     }
