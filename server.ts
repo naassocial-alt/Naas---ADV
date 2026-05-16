@@ -3,7 +3,6 @@ import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import crypto from "crypto";
-import { google } from "googleapis";
 
 dotenv.config();
 
@@ -11,28 +10,71 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 import admin from "firebase-admin";
+import { getFirestore } from "firebase-admin/firestore";
+import { GoogleGenAI, Type } from "@google/genai";
+import fs from "fs";
 
 // Lazy initialize Firebase Admin
 let db: admin.firestore.Firestore | null = null;
+let authFailed = false;
+
 const initAdmin = () => {
-  if (!db) {
-    try {
-      if (!admin.apps.length) {
-        const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-        if (sa) {
-          const config = JSON.parse(sa);
-          admin.initializeApp({ credential: admin.credential.cert(config) });
-        } else {
+  if (db) return db;
+  if (authFailed) return null;
+
+  try {
+    if (!admin.apps.length) {
+      const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
+      if (sa) {
+        const config = JSON.parse(sa);
+        admin.initializeApp({ credential: admin.credential.cert(config) });
+      } else {
+        // Fallback to config file info for project ID
+        try {
+          const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+          if (fs.existsSync(configPath)) {
+            const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+            admin.initializeApp({ projectId: config.projectId });
+          } else {
+            admin.initializeApp();
+          }
+        } catch (e) {
           admin.initializeApp();
         }
       }
-      db = admin.firestore();
-    } catch (err) {
+    }
+
+    // Try to get databaseId from config
+    let databaseId: string | undefined;
+    try {
+      const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        if (config.firestoreDatabaseId && config.firestoreDatabaseId !== "(default)") {
+          databaseId = config.firestoreDatabaseId;
+        }
+      }
+    } catch (e) { /* ignore */ }
+
+    db = databaseId ? getFirestore(databaseId) : getFirestore();
+    return db;
+  } catch (err) {
+    if (!authFailed) {
       console.error("Firebase Admin Init Error:", err);
+      authFailed = true;
+    }
+    return null;
+  }
+};
+
+const genai = new GoogleGenAI({
+  apiKey: process.env.GEMINI_API_KEY as string,
+  httpOptions: {
+    headers: {
+      'User-Agent': 'aistudio-build',
     }
   }
-  return db;
-};
+});
 
 async function startServer() {
   const app = express();
@@ -53,14 +95,23 @@ async function startServer() {
 
   // Helpers for usage tracking
   const incrementUsage = async (field: "ocrCount" | "lineCount" | "requestCount") => {
+    if (authFailed) return;
     const firestore = initAdmin();
     if (!firestore) return;
     const appId = process.env.APP_ID || "advance-system-v3";
     const usageRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/usage`);
     try {
       await usageRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
-    } catch (err) {
-      console.error(`Error incrementing ${field}:`, err);
+    } catch (err: any) {
+      // If we get an unauthenticated error, stop trying to avoid spamming logs
+      if (err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"))) {
+        if (!authFailed) {
+          console.error(`Firebase Auth failed for ${field}. Usage tracking disabled.`, err.message);
+          authFailed = true;
+        }
+      } else {
+        console.error(`Error incrementing ${field}:`, err);
+      }
     }
   };
 
@@ -126,6 +177,94 @@ async function startServer() {
       throw err;
     }
   };
+
+  // AI Content Extraction (Receipts)
+  app.post("/api/extract-receipt", async (req, res) => {
+    const { image } = req.body;
+    if (!image) return res.status(400).json({ error: "No image provided" });
+
+    try {
+      const imageData = image.includes(",") ? image.split(",")[1] : image;
+      const response = await genai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: {
+          parts: [
+            { text: "ช่วยดึงชื่อร้านค้า และยอดเงินรวมจากสลิปนี้ให้หน่อย (Extract store name and total amount)" },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageData
+              }
+            }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              amount: { type: Type.NUMBER }
+            },
+            required: ["name", "amount"]
+          }
+        }
+      });
+      res.json(JSON.parse(response.text || '{}'));
+      await incrementUsage("ocrCount");
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Bulk Import Staff from Image
+  app.post("/api/extract-staff", async (req, res) => {
+    const { image } = req.body;
+    if (!image) return res.status(400).json({ error: "No image provided" });
+
+    try {
+      const imageData = image.includes(",") ? image.split(",")[1] : image;
+      const response = await genai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: {
+          parts: [
+            { text: "ช่วยดึงข้อมูลพนักงานและบัญชีธนาคารจากตารางนี้ (Extract nickname, bank name, account number, and account name)" },
+            {
+              inlineData: {
+                mimeType: "image/jpeg",
+                data: imageData
+              }
+            }
+          ]
+        },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              staff: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    nickname: { type: Type.STRING, description: "ชื่อเล่นพนักงาน" },
+                    bank: { type: Type.STRING, description: "ชื่อย่อธนาคาร (เช่น SCB, KBANK, KTB)" },
+                    accountNumber: { type: Type.STRING, description: "เลขบัญชี (รูปแบบ XXX-X-XXXXX-X)" },
+                    accountName: { type: Type.STRING, description: "ชื่อบัญชี" }
+                  },
+                  required: ["nickname", "bank", "accountNumber", "accountName"]
+                }
+              }
+            }
+          }
+        }
+      });
+      res.json(JSON.parse(response.text || '{"staff":[]}'));
+      await incrementUsage("ocrCount");
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   // Unified LINE Bot Endpoint
   app.post("/api/line-bot", async (req, res) => {
@@ -663,17 +802,6 @@ async function startServer() {
                 clearanceDeadline: deadlineIso
               });
 
-              // Create Drive Folder upon approval via LINE
-              try {
-                const drive = initDrive();
-                const parentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-                if (drive && parentFolderId) {
-                  await getFolderId(drive, data.advanceId, parentFolderId);
-                }
-              } catch (e) {
-                console.error("Drive folder creation failed in webhook:", e);
-              }
-
               await syncToSheets("Approved", deadlineIso);
 
               if (replyToken) {
@@ -764,139 +892,6 @@ async function startServer() {
   // Explicitly handle both with and without trailing slash to avoid 302 redirects
   app.all("/api/line-webhook", webhookHandler);
   app.all("/api/line-webhook/", webhookHandler);
-
-  // Google Drive Helper
-  let driveClient: any = null;
-  const initDrive = () => {
-    if (driveClient) return driveClient;
-    try {
-      const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-      if (!sa) return null;
-      const config = JSON.parse(sa);
-      const auth = new google.auth.JWT({
-        email: config.client_email,
-        key: config.private_key,
-        scopes: ["https://www.googleapis.com/auth/drive"],
-      });
-      driveClient = google.drive({ version: "v3", auth });
-      return driveClient;
-    } catch (err) {
-      console.error("Drive Init Error:", err);
-      return null;
-    }
-  };
-
-  const getFolderId = async (drive: any, name: string, parentId: string) => {
-    const res = await drive.files.list({
-      q: `name = '${name}' and '${parentId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
-      fields: 'files(id, name)',
-      spaces: 'drive',
-    });
-    if (res.data.files && res.data.files.length > 0) {
-      return res.data.files[0].id;
-    }
-    // Create if not exists
-    const folderMetadata = {
-      name: name,
-      mimeType: 'application/vnd.google-apps.folder',
-      parents: [parentId],
-    };
-    const folder = await drive.files.create({
-      resource: folderMetadata,
-      fields: 'id',
-    });
-    return folder.data.id;
-  };
-
-  const uploadToDrive = async (drive: any, fileName: string, folderId: string, base64: string, mimeType = 'image/jpeg') => {
-    const buffer = Buffer.from(base64.replace(/^data:image\/\w+;base64,/, ""), 'base64');
-    const fileMetadata = {
-      name: fileName,
-      parents: [folderId],
-    };
-    const media = {
-      mimeType: mimeType,
-      body: new (class extends require('stream').Readable {
-        _read() {
-          this.push(buffer);
-          this.push(null);
-        }
-      })(),
-    };
-    const file = await drive.files.create({
-      resource: fileMetadata,
-      media: media,
-      fields: 'id, webViewLink, webContentLink',
-    });
-
-    // Make file public if needed, or just return the view link
-    await drive.permissions.create({
-      fileId: file.data.id,
-      resource: {
-        role: 'reader',
-        type: 'anyone',
-      },
-    });
-
-    return file.data.webViewLink;
-  };
-
-  app.post("/api/drive-action", async (req, res) => {
-    const { action, advanceId, receipts, slip } = req.body;
-    const drive = initDrive();
-    const parentFolderId = process.env.GOOGLE_DRIVE_PARENT_FOLDER_ID;
-
-    if (!drive) return res.status(500).json({ error: "Google Drive Client fail to initialize. Please check FIREBASE_SERVICE_ACCOUNT." });
-    if (!parentFolderId) return res.status(500).json({ error: "GOOGLE_DRIVE_PARENT_FOLDER_ID is missing in server environment." });
-
-    try {
-      const folderId = await getFolderId(drive, advanceId, parentFolderId);
-
-      if (action === "init_folder") {
-        return res.json({ success: true, folderId });
-      }
-
-      if (action === "upload_slip" && slip) {
-        const fileName = `${advanceId}_สลิปยืนยันการโอน.jpg`;
-        const url = await uploadToDrive(drive, fileName, folderId, slip);
-        return res.json({ success: true, url });
-      }
-
-      if (action === "upload_receipts" && receipts) {
-        // Find existing files to get next sequence number
-        const existingFiles = await drive.files.list({
-          q: `'${folderId}' in parents and name contains 'หลักฐานการเคลียร์ยอด' and trashed = false`,
-          fields: 'files(name)',
-        });
-        const currentCount = existingFiles.data.files ? existingFiles.data.files.length : 0;
-        let globalSeqOffset = 0;
-
-        const results = await Promise.all(receipts.map(async (r: any) => {
-          const seqMain = (currentCount + globalSeqOffset + 1).toString().padStart(3, '0');
-          globalSeqOffset++;
-          const mainUrl = r.base64 ? await uploadToDrive(drive, `${advanceId}_หลักฐานการเคลียร์ยอด-${seqMain}.jpg`, folderId, r.base64) : null;
-          
-          const additionalUrls = await Promise.all((r.additionalDocs || []).map(async (ad: any) => {
-            const seqAd = (currentCount + globalSeqOffset + 1).toString().padStart(3, '0');
-            globalSeqOffset++;
-            return {
-               url: ad.base64 ? await uploadToDrive(drive, `${advanceId}_หลักฐานการเคลียร์ยอด-${seqAd}.jpg`, folderId, ad.base64) : null,
-               fileName: ad.fileName
-            };
-          }));
-
-          return { mainUrl, additionalUrls };
-        }));
-
-        return res.json({ success: true, results });
-      }
-
-      res.status(400).json({ error: "Invalid action or missing parameters" });
-    } catch (err) {
-      console.error("Drive Action Error:", err);
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
 
   // Google Sheets Proxy
   app.post("/api/sheets-sync", async (req, res) => {

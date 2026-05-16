@@ -5,7 +5,7 @@ import {
   CheckCircle2, XCircle, Search, Loader2, AlertTriangle, Trash2, Edit,
   Image as ImageIcon, ScanLine, User, PieChart, Settings, UserPlus, Zap,
   X, FileText, Calendar, AlertCircle, Activity, MessageSquare, Server as ServerIcon,
-  Tags, ChevronDown, Paperclip
+  Tags, ChevronDown, Paperclip, FileUp
 } from 'lucide-react';
 import { GoogleGenAI, Type } from "@google/genai";
 import { 
@@ -15,14 +15,26 @@ import {
   signInAnonymously, onAuthStateChanged 
 } from 'firebase/auth';
 import { db, auth } from './lib/firebase';
+import * as XLSX from 'xlsx';
 import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 import { Withdrawal, Receipt, SystemConfigs, BankAccount } from './types';
+
+interface StaffRecord {
+  nickname: string;
+  bank: string;
+  accountNumber: string;
+  accountName: string;
+  id: string;
+}
 import { WeeklyReportUI } from './components/WeeklyReportUI';
 // --- 2. Configuration ---
 const appId = 'advance-system-v3'; 
 
 // --- 3. Constants & Helpers ---
-const INITIAL_EMPLOYEES = ["สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน"];
+const INITIAL_EMPLOYEES = [
+  "สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน",
+  "นันทวัฒน์ ม้าแก้ว", "ศรายุทธ แก้วมณี", "ชัยรัตน์ จิตร์งาม", "อธิภัทร ชาติไทย", "เกียรติกุล มาดี"
+];
 const INITIAL_PROJECTS = [
   "คุณแฮม ลัดดาวรรณ (K.HAM LADDAWAN)",
   "คุณเตชิน (K TACHIN)",
@@ -96,21 +108,6 @@ const notifyLine = async (message: string, type: 'text' | 'flex' = 'text', flexD
   }
 };
 
-const callDrive = async (data: any) => {
-  try {
-    const res = await fetch('/api/drive-action', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch (e) {
-    console.error("Drive error:", e);
-    return null;
-  }
-};
-
 const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
   const deadlineDate = new Date(new Date(data.createdAt).getTime() + 30 * 24 * 60 * 60 * 1000);
   const deadlineStr = `${deadlineDate.getDate()}/${deadlineDate.getMonth() + 1}/${deadlineDate.getFullYear() + 543}`;
@@ -120,7 +117,7 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
 
   return {
     type: "flex",
-    altText: `แจ้งเตือนขออนุมัติ: ${data.advanceId}`,
+    altText: `รายการใหม่จาก ${data.employeeName}: ${data.advanceId}`,
     contents: {
       type: "bubble",
       size: "mega",
@@ -243,6 +240,58 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
               }
             ],
             margin: "md"
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              {
+                type: "text",
+                text: "โอนเข้าบัญชี",
+                size: "sm",
+                color: "#888888",
+                flex: 4
+              },
+              {
+                type: "text",
+                text: data.bankAccount ? `${data.bankAccount.bankName} ${data.bankAccount.accountNumber}` : "-",
+                size: "sm",
+                color: "#111111",
+                flex: 6,
+                align: "end",
+                wrap: true
+              }
+            ],
+            margin: "md"
+          },
+          {
+            type: "box",
+            layout: "vertical",
+            margin: "lg",
+            spacing: "xs",
+            contents: data.items.map((item, idx) => ({
+              type: "box",
+              layout: "horizontal",
+              contents: [
+                {
+                  type: "text",
+                  text: `${idx + 1}. ${item.name}`,
+                  size: "xs",
+                  color: "#555555",
+                  flex: 7,
+                  wrap: true
+                },
+                {
+                  type: "text",
+                  text: `฿${(item.amount || 0).toLocaleString()}`,
+                  size: "xs",
+                  color: "#111111",
+                  flex: 3,
+                  align: "end",
+                  weight: "bold"
+                }
+              ]
+            }))
           },
           {
             type: "separator",
@@ -902,16 +951,17 @@ export default function App() {
       if (data.employees && data.employees.list) setDynamicEmployees(data.employees.list);
       
       if (data.projects && data.projects.list) {
-        const list = data.projects.list as string[];
-        // More aggressive migration: if the list has less than 20 items, it's likely the old list or incomplete.
-        // The user explicitly asked for the new list of 46 projects.
-        if (list.length < 20 || list.includes("PROJ-A")) {
-          setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'projects'), { list: INITIAL_PROJECTS });
-        }
-        setDynamicProjects(list);
+        setDynamicProjects(data.projects.list);
       } else if (!data.projects) {
-        // Initialize if empty
+        // Initialize IF and ONLY IF the document does not exist
         setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'projects'), { list: INITIAL_PROJECTS });
+      }
+
+      if (data.employees && data.employees.list) {
+        setDynamicEmployees(data.employees.list);
+      } else if (!data.employees) {
+        // Initialize employees if missing
+        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: INITIAL_EMPLOYEES });
       }
 
       if (data.categories && data.categories.list) setDynamicCategories(data.categories.list);
@@ -960,9 +1010,6 @@ export default function App() {
             approvedAt: new Date().toISOString(),
             clearanceDeadline: deadline.toISOString()
           }).then(async () => {
-            // Create folder in Drive
-            await callDrive({ action: 'init_folder', advanceId: target.advanceId });
-
             const flex = buildStatusFlex(
               "💎 อนุมัติการเบิก (ผ่าน URL)", 
               `ID: ${target.advanceId}\nพนักงาน: ${target.employeeName}\nยอด: ฿${(target.totalAmount || 0).toLocaleString()}`, 
@@ -1165,7 +1212,7 @@ export default function App() {
       
       const appUrl = systemConfigs.webAppUrl || window.location.origin;
       const flex = buildRequestFlex({ id: docRef.id, ...docData } as any, appUrl);
-      await notifyLine(`รายการใหม่: ${id}`, 'flex', flex);
+      await notifyLine(`รายการใหม่ [${docData.employeeName}]: ${id}`, 'flex', flex);
 
       if (systemConfigs.sheetsUrl) {
         await syncToSheets(systemConfigs.sheetsUrl, {
@@ -1218,69 +1265,179 @@ export default function App() {
     if (clrForm.receipts.some(r => !r.base64)) return alert("แนบรูปสลิปให้ครบก่อน");
     setIsBusy(true);
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        throw new Error("GEMINI_API_KEY is not configured. Please check Settings > Secrets.");
-      }
-
-      const genAI = new GoogleGenAI({ apiKey });
-      
       const updated = await Promise.all(clrForm.receipts.map(async (r) => {
         try {
-          const imageData = r.base64.includes(",") ? r.base64.split(",")[1] : r.base64;
-          
-          const response = await genAI.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: {
-              parts: [
-                { text: "ช่วยดึงชื่อร้านค้า และยอดเงินรวมจากสลิปนี้ให้หน่อย (Extract store name and total amount)" },
-                {
-                  inlineData: {
-                    mimeType: "image/jpeg",
-                    data: imageData
-                  }
-                }
-              ]
-            },
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  name: {
-                    type: Type.STRING,
-                    description: "The name of the store or merchant."
-                  },
-                  amount: {
-                    type: Type.NUMBER,
-                    description: "The total amount of the transaction."
-                  }
-                },
-                required: ["name", "amount"]
-              }
-            }
+          const res = await fetch('/api/extract-receipt', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ image: r.base64 })
           });
-
-          const json = JSON.parse(response.text || '{}');
+          const json = await res.json();
+          if (json.error) throw new Error(json.error);
           return { ...r, name: json.name || 'ไม่ระบุ', amount: json.amount || 0, originalAmount: json.amount || 0 } as Receipt;
         } catch (err) {
-          console.error("Single receipt AI error:", err);
-          return { ...r, name: 'AI Error', amount: 0, originalAmount: 0 } as Receipt;
+           console.error("Single receipt AI error:", err);
+           return { ...r, name: 'AI Error', amount: 0, originalAmount: 0 } as Receipt;
         }
       }));
       
       setClrForm({ ...clrForm, receipts: detectDuplicates(updated, withdrawals) });
       setOcrModal({ show: true, total: updated.reduce((s, x) => s + Number(x.amount || 0), 0) });
     } catch (e) { 
-      const errMsg = (e as Error).message;
-      if (errMsg.includes("API_KEY_INVALID") || errMsg.includes("PERMISSION_DENIED")) {
-        alert("API Key ไม่ถูกต้องหรือยังไม่ได้ตั้งค่า กรุณาตรวจสอบที่เมนู Settings > Secrets");
-      } else {
-        alert(`AI ล้มเหลว: ${errMsg}`);
-      }
+      alert(`AI ล้มเหลว: ${(e as Error).message}`);
       console.error(e); 
     } finally { 
       setIsBusy(false); 
+    }
+  };
+
+  const [staffEditList, setStaffEditList] = useState<StaffRecord[]>([]);
+  const [showStaffTable, setShowStaffTable] = useState(false);
+
+  useEffect(() => {
+    const list: StaffRecord[] = [];
+    dynamicEmployees.forEach(emp => {
+      const accs = employeeBankAccounts[emp] || [];
+      if (accs.length === 0) {
+        list.push({ nickname: emp, bank: '', accountNumber: '', accountName: '', id: `empty-${emp}-${Math.random().toString(36).slice(2,5)}` });
+      } else {
+        accs.forEach(acc => {
+          list.push({ nickname: emp, bank: acc.bankName, accountNumber: acc.accountNumber, accountName: acc.accountName, id: acc.id });
+        });
+      }
+    });
+    setStaffEditList(list);
+  }, [dynamicEmployees, employeeBankAccounts]);
+
+  const saveStaffTable = async () => {
+    setIsBusy(true);
+    try {
+      const nicknames = [...new Set(staffEditList.map(s => s.nickname).filter(n => n.trim()))];
+      const bankAccounts: { [name: string]: BankAccount[] } = {};
+      
+      staffEditList.forEach(s => {
+        if (!s.nickname.trim()) return;
+        if (!bankAccounts[s.nickname]) bankAccounts[s.nickname] = [];
+        if (s.bank || s.accountNumber || s.accountName) {
+           bankAccounts[s.nickname].push({
+             id: s.id.startsWith('empty-') ? Math.random().toString(36).substring(2, 9) : s.id,
+             bankName: s.bank,
+             accountNumber: s.accountNumber,
+             accountName: s.accountName,
+             isDefault: true
+           });
+        }
+      });
+
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: nicknames });
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'bank_accounts'), bankAccounts);
+      alert("บันทึกข้อมูลพนักงานและบัญชีธนาคารเรียบร้อยแล้ว");
+    } catch (e) {
+      alert("เกิดข้อผิดพลาดในการบันทึก: " + (e as Error).message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleBulkStaffExcelImport = async (file: File | null) => {
+    if (!file) return;
+    setIsBusy(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          
+          // header: 1 returns array of arrays. We assume:
+          // Row 0 or 1 might be headers. We'll skip rows that look like headers or take rows that have data.
+          // Format: Nickname, Bank, AccNo, AccName
+          
+          const filteredRows = json.filter((row: any[]) => row.length > 0 && row[0]);
+          // If first row is "ชื่อเล่น" or similar, skip it
+          if (filteredRows[0][0] === "ชื่อเล่น" || filteredRows[0][0] === "Nickname") {
+            filteredRows.shift();
+          }
+
+          const imported = filteredRows.map((row: any[]) => ({
+            nickname: (row[0] || '').toString().trim(),
+            bank: (row[1] || '').toString().trim(),
+            accountNumber: (row[2] || '').toString().trim(),
+            accountName: (row[3] || '').toString().trim(),
+            id: Math.random().toString(36).substring(2, 9)
+          })).filter(s => s.nickname);
+
+          if (imported.length > 0) {
+            setStaffEditList(prev => [...prev, ...imported]);
+            alert(`โหลดข้อมูลจาก Excel เรียบร้อย! เพิ่ม ${imported.length} รายการ (กรุณากด 'Save Changes' เพื่อบันทึกลงระบบ)`);
+          } else {
+            alert("ไม่พบข้อมูลพนักงานในไฟล์ Excel");
+          }
+        } catch (err) {
+          alert("เกิดข้อผิดพลาดในการอ่านไฟล์: " + (err as Error).message);
+        } finally {
+          setIsBusy(false);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (e) {
+      alert("การนำเข้าล้มเหลว: " + (e as Error).message);
+      setIsBusy(false);
+    }
+  };
+
+  const handleBulkProjectExcelImport = async (file: File | null) => {
+    if (!file) return;
+    setIsBusy(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const workbook = XLSX.read(data, { type: 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          const json: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+          
+          if (json.length === 0) return alert("ไฟล์ว่างเปล่า");
+
+          const headers = json[0].map((h: any) => (h || '').toString().trim());
+          const nameIdx = headers.findIndex((h: string) => h === "รายชื่อโปรเจค" || h === "Project List" || h === "รายชื่อโปรเจกต์");
+          
+          let importedNames: string[] = [];
+          if (nameIdx !== -1) {
+            // Take from the column
+            importedNames = json.slice(1)
+              .map(row => (row[nameIdx] || '').toString().trim())
+              .filter(n => n !== '');
+          } else {
+            // Try to find the column anywhere if not in header row 0
+            // Or just take column 0 if user provided a simple list
+            importedNames = json
+              .map(row => (row[0] || '').toString().trim())
+              .filter(n => n !== '' && n !== "รายชื่อโปรเจค" && n !== "Project List" && n !== "รายชื่อโปรเจกต์");
+          }
+
+          if (importedNames.length > 0) {
+            const newList = [...new Set([...dynamicProjects, ...importedNames])];
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'projects'), { list: newList });
+            alert(`นำเข้าโปรเจกต์ ${importedNames.length} รายการ เรียบร้อยแล้ว`);
+          } else {
+            alert("ไม่พบข้อมูลโปรเจกต์ในไฟล์ (ตรวจสอบว่ามีคอลัมน์ 'รายชื่อโปรเจค')");
+          }
+        } catch (err) {
+          alert("เกิดข้อผิดพลาดในการอ่านไฟล์: " + (err as Error).message);
+        } finally {
+          setIsBusy(false);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    } catch (e) {
+      alert("การนำเข้าล้มเหลว: " + (e as Error).message);
+      setIsBusy(false);
     }
   };
 
@@ -1289,17 +1446,8 @@ export default function App() {
     setIsBusy(true);
     try {
       const b64 = await compressImg(file);
-      
-      // Upload to Drive
-      const driveRes = await callDrive({ 
-        action: 'upload_slip', 
-        advanceId: selectedWithdrawal.advanceId, 
-        slip: b64 
-      });
-
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedWithdrawal.id), {
-        transferSlip: driveRes?.url ? '' : b64,
-        transferSlipDriveUrl: driveRes?.url || null,
+        transferSlip: b64,
         status: 'approved'
       });
       await notifyLine(`💸 อัปโหลดหลักฐานการโอนเงินแล้ว\nID: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nยอด: ฿${selectedWithdrawal.totalAmount.toLocaleString()}`, 'text');
@@ -1314,33 +1462,32 @@ export default function App() {
     try {
       const total = clrForm.receipts.reduce((s, r) => s + Number(r.amount || 0), 0);
       
-      // 1. Upload to Google Drive
-      const driveRes = await callDrive({
-        action: 'upload_receipts',
-        advanceId: selectedAdvData.advanceId,
-        receipts: clrForm.receipts
-      });
-      const driveResults = driveRes?.results || [];
+      // 1. Upload to Google Drive via GAS if sheetsUrl is present
+      let driveUrls: string[] = [];
+      if (systemConfigs.sheetsUrl) {
+        const uploadRes = await syncToSheets(systemConfigs.sheetsUrl, {
+          action: 'upload_receipts',
+          advanceId: selectedAdvData.advanceId,
+          employee: selectedAdvData.employeeName,
+          receipts: clrForm.receipts.map(r => ({
+            name: r.name,
+            amount: r.amount,
+            base64: r.base64
+          }))
+        });
+        if (uploadRes && uploadRes.urls) {
+          driveUrls = uploadRes.urls;
+        }
+      }
 
-      const newItems = clrForm.receipts.map((r, i) => {
-        const res = driveResults[i];
-        return {
-          ...r, 
-          isEdited: Number(r.amount) !== Number(r.originalAmount),
-          docStatus: 'waiting', 
-          fileName: `${new Date().toISOString().split('T')[0]}_${selectedAdvData.advanceId}_${i}.jpg`,
-          driveUrl: res?.mainUrl || null,
-          base64: res?.mainUrl ? '' : r.base64,
-          additionalDocs: (r.additionalDocs || []).map((ad: any, adIdx: number) => {
-             const adRes = res?.additionalUrls?.[adIdx];
-             return {
-                ...ad,
-                driveUrl: adRes?.url || null,
-                base64: adRes?.url ? '' : ad.base64
-             };
-          })
-        };
-      });
+      const newItems = clrForm.receipts.map((r, i) => ({
+        ...r, 
+        isEdited: Number(r.amount) !== Number(r.originalAmount),
+        docStatus: 'waiting', 
+        fileName: `${new Date().toISOString().split('T')[0]}_${selectedAdvData.advanceId}_${i}.jpg`,
+        driveUrl: driveUrls[i] || null, // Store Drive URL
+        base64: driveUrls[i] ? '' : r.base64 // Clear base64 if we have driveUrl to save space
+      }));
       const newSpend = selectedAdvData.actualSpend + total;
 
       const combinedReceipts = optimizeReceipts([...(selectedAdvData.receipts || []), ...newItems]);
@@ -1358,11 +1505,6 @@ export default function App() {
       setClrForm({ advanceId: '', receipts: [{ name: '', amount: 0, base64: '', fileName: '', isProcessing: false, projectId: '', description: '', originalAmount: 0, additionalDocs: [] }] });
       setActiveTab('history');
       
-      const driveLinks = driveResults.flatMap(res => [
-        res.mainUrl,
-        ...(res.additionalUrls || []).map((ad: any) => ad.url)
-      ]).filter(Boolean).join(', ');
-
       const spendingDetail = clrForm.receipts.map(r => `• ${r.name}: ฿${r.amount.toLocaleString()}`).join('\n');
       const flex = buildStatusFlex("✅ เคลียร์ยอดแล้ว", `ADV: ${selectedAdvData.advanceId}\nพนักงาน: ${selectedAdvData.employeeName}\nยอดเคลียร์: ฿${total.toLocaleString()}`, "#10B981", "💰");
       notifyLine("รายการเคลียร์ยอดใหม่", 'flex', flex);
@@ -1380,7 +1522,7 @@ export default function App() {
               remainingBalance: selectedAdvData.totalAmount - newSpend,
               clearedAt: new Date().toISOString(),
               receiptsSummary: spendingDetail,
-              driveLinks: driveLinks
+              driveLinks: driveUrls.join(', ')
             }
          });
       }
@@ -1579,20 +1721,6 @@ export default function App() {
     if (settingsPassword === systemConfigs.accPin || settingsPassword === systemConfigs.execPin) {
       setIsSettingsAuthed(true); setShowSettingsLogin(false); setActiveTab('settings'); setSettingsPassword('');
     } else { alert("รหัสผ่านไม่ถูกต้อง เฉพาะบัญชีและผู้บริหารเท่านั้น"); }
-  };
-
-  const addEmployee = async () => {
-    if (!newEmployeeName) return;
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: [...dynamicEmployees, newEmployeeName] });
-      setNewEmployeeName('');
-    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs/employees'); }
-  };
-
-  const removeEmployee = async (name: string) => {
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: dynamicEmployees.filter(e => e !== name) });
-    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs/employees'); }
   };
   
   const addProject = async () => {
@@ -2451,28 +2579,119 @@ export default function App() {
         {activeTab === 'settings' && isSettingsAuthed && (
           <div className="space-y-6 animate-in slide-in-from-bottom-5 max-w-2xl mx-auto pb-10">
              <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm space-y-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-sm">
-                  <UserPlus className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-black text-slate-800 uppercase leading-none">Staff Roster</h3>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Manage Authorized Employees</p>
-                </div>
-              </div>
-
-              <div className="flex gap-2">
-                <input type="text" className="flex-1 bg-slate-50 border-none rounded-2xl px-5 py-3.5 text-sm font-bold placeholder:text-slate-300 outline-none focus:ring-2 ring-blue-500/20" placeholder="Full name..." value={newEmployeeName} onChange={e => setNewEmployeeName(e.target.value)} />
-                <button onClick={addEmployee} className="bg-[#0F172A] text-white px-8 py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-lg active:scale-95 transition-all">Add Staff</button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-h-[30vh] overflow-y-auto pr-2 custom-scrollbar">
-                {dynamicEmployees.map((emp, i) => (
-                  <div key={i} className="flex justify-between items-center bg-white p-4 rounded-2xl border border-slate-50 hover:border-slate-200 transition-all">
-                    <span className="text-[11px] font-bold text-slate-600">{emp}</span>
-                    <button onClick={() => removeEmployee(emp)} className="text-slate-300 hover:text-rose-500 transition-colors p-1"><X className="w-4 h-4"/></button>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-sm">
+                    <UserPlus className="w-5 h-5" />
                   </div>
-                ))}
+                  <div>
+                    <h3 className="text-base font-black text-slate-800 uppercase leading-none">Staff & Bank Roster</h3>
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Manage Employees & Accounts</p>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <label className="flex items-center justify-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all border border-emerald-100 cursor-pointer shadow-sm active:scale-95">
+                    <FileText className="w-4 h-4" /> Import Excel
+                    <input type="file" className="hidden" accept=".xlsx, .xls" onChange={e => handleBulkStaffExcelImport(e.target.files?.[0] || null)} disabled={isBusy} />
+                  </label>
+                  <button 
+                    onClick={() => setStaffEditList([...staffEditList, { nickname: '', bank: '', accountNumber: '', accountName: '', id: Math.random().toString(36).substring(2, 9) }])}
+                    className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-50 text-blue-600 rounded-xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all border border-blue-100 shadow-sm active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" /> Add Row
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-[1.5rem] border border-slate-50">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/50">
+                      <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">ชื่อเล่น</th>
+                      <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">ธนาคาร</th>
+                      <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">เลขบัญชี</th>
+                      <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100">ชื่อบัญชี</th>
+                      <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 w-10"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {staffEditList.map((row, idx) => (
+                      <tr key={row.id} className="hover:bg-slate-50/30 transition-colors">
+                        <td className="px-2 py-2">
+                          <input 
+                            type="text" 
+                            className="w-full bg-transparent border-none rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none focus:ring-1 ring-blue-500/20" 
+                            value={row.nickname} 
+                            onChange={e => {
+                              const updated = [...staffEditList];
+                              updated[idx].nickname = e.target.value;
+                              setStaffEditList(updated);
+                            }}
+                            placeholder="..."
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input 
+                            type="text" 
+                            className="w-full bg-transparent border-none rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none focus:ring-1 ring-blue-500/20" 
+                            value={row.bank} 
+                            onChange={e => {
+                              const updated = [...staffEditList];
+                              updated[idx].bank = e.target.value;
+                              setStaffEditList(updated);
+                            }}
+                            placeholder="..."
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input 
+                            type="text" 
+                            className="w-full bg-transparent border-none rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700 font-mono outline-none focus:ring-1 ring-blue-500/20" 
+                            value={row.accountNumber} 
+                            onChange={e => {
+                              const updated = [...staffEditList];
+                              updated[idx].accountNumber = e.target.value;
+                              setStaffEditList(updated);
+                            }}
+                            placeholder="..."
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input 
+                            type="text" 
+                            className="w-full bg-transparent border-none rounded-lg px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none focus:ring-1 ring-blue-500/20" 
+                            value={row.accountName} 
+                            onChange={e => {
+                              const updated = [...staffEditList];
+                              updated[idx].accountName = e.target.value;
+                              setStaffEditList(updated);
+                            }}
+                            placeholder="..."
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <button 
+                            onClick={() => setStaffEditList(staffEditList.filter((_, i) => i !== idx))}
+                            className="p-1 text-slate-300 hover:text-rose-500 transition-colors"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="flex justify-end pt-2">
+                <button 
+                  onClick={saveStaffTable}
+                  disabled={isBusy}
+                  className="bg-[#0F172A] text-white px-10 py-3 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl active:scale-95 transition-all flex items-center gap-2"
+                >
+                  {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Edit className="w-4 h-4" />}
+                  {isBusy ? "Saving..." : "Save Staff Changes"}
+                </button>
               </div>
             </div>
 
@@ -2489,6 +2708,10 @@ export default function App() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    <label className="flex items-center justify-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-emerald-600 hover:text-white transition-all border border-emerald-100 cursor-pointer shadow-sm active:scale-95">
+                      <FileUp className="w-3.5 h-3.5" /> Excel Import
+                      <input type="file" className="hidden" accept=".xlsx, .xls" onChange={e => handleBulkProjectExcelImport(e.target.files?.[0] || null)} disabled={isBusy} />
+                    </label>
                     {selectedProjectItems.length > 0 && (
                       <button 
                         onClick={async () => {
@@ -2520,33 +2743,52 @@ export default function App() {
                   </div>
                 </div>
                 
-                <div className="flex gap-2">
-                  <input type="text" className="flex-1 bg-slate-50 border-none rounded-xl px-4 py-3 text-xs font-bold outline-none focus:ring-2 ring-blue-500/10" placeholder="New Project Name..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
-                  <button onClick={addProject} className="bg-[#0F172A] text-white px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all">Add</button>
+                <div className="flex flex-col gap-2">
+                  <div className="flex gap-2">
+                    <input type="text" className="flex-1 bg-slate-50 border-none rounded-xl px-4 py-3 text-xs font-bold outline-none focus:ring-2 ring-blue-500/10" placeholder="New Project Name..." value={newProjectName} onChange={e => setNewProjectName(e.target.value)} />
+                    <button onClick={addProject} className="bg-[#0F172A] text-white px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-800 transition-all">Add</button>
+                  </div>
+                  <button 
+                    onClick={async () => {
+                      const pNames = prompt("ใส่ชื่อโปรเจกต์ (คั่นด้วยคอมม่า , หรือ ขึ้นบรรทัดใหม่):");
+                      if (pNames) {
+                        const list = pNames.split(/[,\n]/).map(n => n.trim()).filter(n => n !== '');
+                        if (list.length > 0) {
+                          try {
+                            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'projects'), { list: [...new Set([...dynamicProjects, ...list])] });
+                            alert(`นำเข้าโปรเจกต์ ${list.length} รายการ เรียบร้อยแล้ว`);
+                          } catch (e) { alert("เกิดข้อผิดพลาด"); }
+                        }
+                      }
+                    }}
+                    className="w-full py-2 bg-slate-50 text-slate-400 rounded-xl text-[8px] font-black uppercase tracking-widest hover:text-emerald-600 transition-all border border-slate-100"
+                  >
+                    Bulk Import Projects
+                  </button>
                 </div>
                 
                 <button onClick={resetToDefaultProjects} className="w-full py-2.5 bg-blue-50 text-blue-600 rounded-xl text-[9px] font-black uppercase tracking-widest hover:bg-blue-600 hover:text-white transition-all border border-blue-100">Reset to Default List (46 Projects)</button>
                 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar pb-10">
-                  {dynamicProjects.filter(p => !settingsProjSearch || p.toLowerCase().includes(settingsProjSearch.toLowerCase())).map((p, i) => (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-[80vh] overflow-y-auto pr-2 custom-scrollbar pb-10">
+                  {dynamicProjects.filter(p => !settingsProjSearch || p.toLowerCase().includes(settingsProjSearch.toLowerCase())).sort().map((p, i) => (
                     <div 
-                      key={i} 
+                      key={p} 
                       onClick={() => setSelectedProjectItems(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
                       className={`flex justify-between items-center px-4 py-3 rounded-2xl text-[10px] font-bold transition-all cursor-pointer border ${
                         selectedProjectItems.includes(p) 
                         ? 'bg-blue-50 border-blue-200 text-blue-700 shadow-sm' 
-                        : 'bg-slate-50/50 hover:bg-slate-50 text-slate-600 border-transparent hover:border-slate-100'
+                        : 'bg-slate-50/50 hover:bg-slate-50 text-slate-600 border-slate-100 hover:border-slate-300'
                       }`}
                     >
                       <div className="flex items-center gap-2 truncate">
-                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all ${selectedProjectItems.includes(p) ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white border-slate-200'}`}>
+                        <div className={`w-4 h-4 rounded border flex items-center justify-center transition-all flex-shrink-0 ${selectedProjectItems.includes(p) ? 'bg-blue-500 border-blue-500 text-white' : 'bg-white border-slate-200'}`}>
                           {selectedProjectItems.includes(p) && <CheckCircle2 className="w-3 h-3" />}
                         </div>
                         <span className="truncate">{p}</span>
                       </div>
                       <button 
                         onClick={(e) => { e.stopPropagation(); removeProject(p); }} 
-                        className={`transition-colors p-1 ${selectedProjectItems.includes(p) ? 'text-blue-400 hover:text-rose-500' : 'text-slate-300 hover:text-rose-500'}`}
+                        className={`transition-colors p-1 flex-shrink-0 ${selectedProjectItems.includes(p) ? 'text-blue-400 hover:text-rose-500' : 'text-slate-300 hover:text-rose-500'}`}
                       >
                         <X className="w-3.5 h-3.5"/>
                       </button>
@@ -2767,50 +3009,6 @@ export default function App() {
                 </div>
 
                 <div className="space-y-4 pt-2">
-                  <div className="bg-slate-50 p-6 rounded-[2rem] border border-slate-100 space-y-4">
-                    <h3 className="text-xs font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
-                      <Wallet className="w-4 h-4 text-emerald-500" /> บัญชีธนาคารมาตรฐาน (Requester Accounts)
-                    </h3>
-                    <div className="space-y-4">
-                      {dynamicEmployees.map(emp => (
-                        <div key={emp} className="space-y-2">
-                          <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest px-1">{emp}</label>
-                          <div className="grid grid-cols-1 gap-2">
-                            {(employeeBankAccounts[emp] || []).map(acc => (
-                              <div key={acc.id} className="bg-white p-3 rounded-xl border border-slate-100 flex items-center justify-between shadow-sm">
-                                <div>
-                                  <p className="text-[10px] font-black text-slate-800 uppercase">{acc.bankName} - {acc.accountNumber}</p>
-                                  <p className="text-[9px] font-bold text-slate-400">{acc.accountName}</p>
-                                </div>
-                                <button 
-                                  onClick={async () => {
-                                    if (!confirm(`ลบบัญชีของ ${emp} ใช่หรือไม่?`)) return;
-                                    const updated = (employeeBankAccounts[emp] || []).filter(a => a.id !== acc.id);
-                                    try {
-                                      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'bank_accounts'), {
-                                        ...employeeBankAccounts,
-                                        [emp]: updated
-                                      });
-                                    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs/bank_accounts'); }
-                                  }}
-                                  className="w-8 h-8 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center hover:bg-rose-500 hover:text-white transition-all shadow-sm"
-                                ><X className="w-4 h-4" /></button>
-                              </div>
-                            ))}
-                            <button 
-                              onClick={() => {
-                                setBankEmp(emp);
-                                setShowAddBankModal(true);
-                                setTempBank({ id: '', bankName: '', accountNumber: '', accountName: '', isDefault: true });
-                              }}
-                              className="w-full py-2 bg-white border border-dashed border-slate-200 rounded-xl text-[9px] font-black text-slate-400 uppercase hover:border-emerald-200 hover:text-emerald-500 transition-all active:scale-95"
-                            >+ เพิ่มบัญชีสำหรับ {emp}</button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-1 flex items-center justify-between">
                       Authorized Approvers (รายชื่อผู้อนุมัติ)
@@ -2927,6 +3125,9 @@ export default function App() {
             </div>
 
             <button onClick={() => { setIsSettingsAuthed(false); setActiveTab('history'); }} className="w-full bg-slate-100 text-slate-400 py-4 rounded-[2rem] font-black text-[10px] uppercase tracking-widest border border-slate-200">Close Settings</button>
+            <div className="text-center opacity-30 mt-4 mb-10">
+               <p className="text-[7px] font-black text-slate-400 uppercase tracking-[0.2em]">System ID: {appId}</p>
+            </div>
           </div>
         )}
 
@@ -3474,7 +3675,7 @@ export default function App() {
       )}
 
       {/* Mobile Nav */}
-      <nav className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 h-14 flex items-center justify-around px-2 z-40 shadow-2xl rounded-t-2xl">
+      <nav className="fixed bottom-0 inset-x-0 bg-white/95 backdrop-blur-md border-t border-slate-200 flex items-center justify-around px-2 z-40 shadow-2xl rounded-t-2xl pb-[env(safe-area-inset-bottom)] h-[calc(3.5rem+env(safe-area-inset-bottom))]">
         {[
           { id: 'request', label: 'ขอเบิก', icon: Plus },
           { id: 'clearance', label: 'เคลียร์', icon: Wallet },
@@ -3483,7 +3684,7 @@ export default function App() {
           { id: 'approvals', label: 'อนุมัติ', icon: Lock },
           { id: 'settings', label: 'ตั้งค่า', icon: Settings }
         ].map(nav => (
-          <button key={nav.id} onClick={() => nav.id === 'settings' ? setShowSettingsLogin(true) : setActiveTab(nav.id)} className={`flex flex-col items-center gap-0.5 flex-1 transition-all ${activeTab === nav.id ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
+          <button key={nav.id} onClick={() => nav.id === 'settings' ? setShowSettingsLogin(true) : setActiveTab(nav.id)} className={`flex flex-col items-center gap-0.5 flex-1 transition-all h-full justify-center ${activeTab === nav.id ? 'text-blue-600 scale-110' : 'text-slate-400'}`}>
             <nav.icon className={`w-5 h-5 ${activeTab === nav.id ? 'fill-blue-50' : ''}`} />
             <span className="text-[8px] font-black uppercase tracking-tighter">{nav.label}</span>
           </button>
