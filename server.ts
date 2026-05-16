@@ -31,13 +31,13 @@ const initAdmin = () => {
           admin.initializeApp({
             credential: admin.credential.cert(config)
           });
+          console.log("[Firebase Admin] Initialized with Service Account");
         } catch (e) {
           console.error("Invalid FIREBASE_SERVICE_ACCOUNT JSON:", e);
           admin.initializeApp();
         }
       } else {
         // Safe default: try application default credentials if in GCP, else just projectId
-        // This avoids the 16 UNAUTHENTICATED error in most hosting environments
         try {
           const configPath = path.join(process.cwd(), "firebase-applet-config.json");
           if (fs.existsSync(configPath)) {
@@ -138,16 +138,17 @@ async function startServer() {
     try {
       await usageRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
     } catch (err: any) {
-      // If we get an unauthenticated error (16), stop trying to avoid spamming logs
+      // If we get an unauthenticated error (16) or PERMISSION_DENIED (7), stop trying to avoid spamming logs
       const isUnauth = err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"));
-      if (isUnauth) {
+      const isDenied = err.code === 7 || (err.message && err.message.includes("PERMISSION_DENIED"));
+      if (isUnauth || isDenied) {
         if (!authFailed) {
           // Log only once per server lifetime
-          console.info(`[Usage Tracking] Not authenticated for ${field}. Disabling tracking to save resources.`);
+          console.info(`[Usage Tracking] Permission/Auth failed for ${field} (code: ${err.code}). Disabling tracking to save resources.`);
           authFailed = true;
         }
       } else {
-        // For other errors (permission denied, etc), log but maybe don't kill everything unless it's a pattern
+        // For other errors, log but maybe don't kill everything unless it's a pattern
         console.warn(`[Usage Tracking] Error incrementing ${field}:`, err.message || err);
       }
     }
@@ -614,6 +615,7 @@ async function startServer() {
         const replyToken = event.replyToken;
         const userId = event.source.userId;
 
+        const firestore = initAdmin();
         if (!firestore) continue;
         const appId = process.env.APP_ID || "advance-system-v3";
         const configsRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
@@ -738,7 +740,10 @@ async function startServer() {
 
         if (text.includes("รออนุมัติ")) {
           try {
-            const snap = await firestore.collection(`artifacts/${appId}/public/data/withdrawals`).where("status", "==", "pending").limit(10).get();
+            const firestore = initAdmin();
+            if (!firestore) continue;
+            const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
+            const snap = await withdrawalsRef.where("status", "==", "pending").get();
             if (snap.empty) {
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "✨ ไม่มีรายการค้างอนุมัติในขณะนี้" }]);
               continue;
@@ -760,31 +765,11 @@ async function startServer() {
 
         if (text.includes("สถานะ")) {
           if (replyToken) {
-            await replyMessage(replyToken, [{ type: "text", text: "🔎 กรุณาพิมพ์เลขที่เอกสาร (เช่น ADV-260505-001) เพื่อตรวจสอบสถานะครับ" }]);
+            await replyMessage(replyToken, [{ type: "text", text: "✅ ระบบเชื่อมต่อกับ Firebase สำเร็จ" }]);
           }
           continue;
         }
 
-        // Match Advance ID (Public Status Lookup)
-        if (/^ADV-\d{6}-\d{3}$/.test(text)) {
-          try {
-            const snap = await firestore.collection(`artifacts/${appId}/public/data/withdrawals`).where("advanceId", "==", text).get();
-            if (snap.empty) {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${text}` }]);
-              continue;
-            }
-            const data = snap.docs[0].data();
-            if (replyToken) {
-              const statusMap: any = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ/ไม่อนุมัติ" };
-              const colorMap: any = { pending: "#F59E0B", approved: "#10B981", rejected: "#EF4444" };
-              const flex = createResultFlex("ตรวจสอบข้อมูล", colorMap[data.status] || "#64748B", data, statusMap[data.status] || data.status, data.clearanceDeadline);
-              await replyMessage(replyToken, [flex]);
-            }
-          } catch (e) { console.error("ID lookup error:", e); }
-          continue;
-        }
-
-        // Protection logic: if IDs are defined, must be in the list for SENSITIVE ACTIONS
         if (text.startsWith("ไม่อนุมัติ ")) {
           if ((allowedLineIds.length > 0 || approvers.length > 0) && userId) {
             const isLegacyAuth = allowedLineIds.includes(userId);
@@ -800,68 +785,96 @@ async function startServer() {
           }
 
           const advId = text.replace("ไม่อนุมัติ ", "").trim();
-          // ... rest of logic
           
           try {
+            const firestore = initAdmin();
+            if (!firestore) continue;
             const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
-            const query = await withdrawalsRef.where("advanceId", "==", advId).get();
+            const querySnap = await withdrawalsRef.where("advanceId", "==", advId).get();
+            if (querySnap.empty) {
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${advId}` }]);
+              continue;
+            }
+            const docId = querySnap.docs[0].id;
+            
+            const result = await firestore.runTransaction(async (t) => {
+              const docRef = firestore.doc(`artifacts/${appId}/public/data/withdrawals/${docId}`);
+              const docSnap = await t.get(docRef);
 
-            if (query.empty) {
+              if (!docSnap.exists) return { error: "not_found" };
+
+              const data = docSnap.data() as any;
+
+              if (data.status !== "pending") {
+                return { alreadyProcessed: true, data };
+              }
+
+              const approver = approvers.find((a: any) => a.lineId === userId);
+              const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
+              const now = new Date().toISOString();
+
+              const updateData = { 
+                status: "rejected",
+                approvedBy: userId,
+                approvedByName: approverName,
+                rejectedAt: now
+              };
+              t.update(docRef, updateData as any);
+              return { success: true, data: { ...data, ...updateData }, approverName };
+            });
+
+            if (result.error === "not_found") {
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${advId}` }]);
               continue;
             }
 
-            const docRef = query.docs[0].ref;
-            const data = query.docs[0].data();
-
-            if (data.status !== "pending") {
-              const statusLabel = data.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
-              const processedBy = data.approvedByName ? ` โดย ${data.approvedByName}` : '';
-              const message = `⚠️ รายการ ${advId} นี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: message }]);
+            if (result.alreadyProcessed) {
+              const data = result.data;
+              const statusLabel = data?.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
+              const processedBy = data?.approvedByName ? ` โดย ${data.approvedByName}` : '';
+              
+              if (replyToken) {
+                const message = `⚠️ รายการนี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
+                await replyMessage(replyToken, [{ type: "text", text: message }]);
+              }
               continue;
             }
 
-            const approver = approvers.find((a: any) => a.lineId === userId);
-            const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
+            if (result.success) {
+              const data = result.data;
+              const approverName = result.approverName;
 
-            await docRef.update({ 
-              status: "rejected",
-              approvedBy: userId,
-              approvedByName: approverName,
-              rejectedAt: new Date().toISOString()
-            });
-            
-            // Sync to sheets
-            const sheetsUrl = configs.sheetsUrl;
-            if (sheetsUrl) {
-              await fetch(sheetsUrl, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  id: data.advanceId,
-                  employee: data.employeeName,
-                  amount: data.totalAmount,
-                  projects: (data.projectIds || []).join(", "),
-                  approvedAt: new Date().toISOString(),
-                  status: "Rejected",
-                  approvedBy: approverName,
-                  clearanceDeadline: ""
-                }),
-              }).catch(e => console.error("Sheets sync error:", e));
-            }
+              // Sync to sheets
+              const sheetsUrl = configs.sheetsUrl;
+              if (sheetsUrl) {
+                await fetch(sheetsUrl, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    id: data.advanceId,
+                    employee: data.employeeName,
+                    amount: data.totalAmount,
+                    projects: (data.projectIds || []).join(", "),
+                    approvedAt: new Date().toISOString(),
+                    status: "Rejected",
+                    approvedBy: approverName,
+                    clearanceDeadline: ""
+                  }),
+                }).catch(e => console.error("Sheets sync error:", e));
+              }
 
-            if (replyToken) {
-              const flex = createResultFlex("ผลการปฏิเสธ", "#EF4444", data, `ถูกปฏิเสธแล้ว โดย ${approverName}`);
-              await replyMessage(replyToken, [flex]);
+              if (replyToken) {
+                const flex = createResultFlex("ผลการปฏิเสธ", "#EF4444", data, `ถูกปฏิเสธแล้ว โดย ${approverName}`);
+                await replyMessage(replyToken, [flex]);
+              }
             }
           } catch (err) {
-            console.error("Error in message handler:", err);
-            if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ เกิดข้อผิดพลาด: ${(err as Error).message}` }]);
+            console.error("Error in message handler transaction:", err);
+            if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ เกิดข้อผิดพลาดในการประมวลผล กรุณาลองใหม่อีกครั้ง` }]);
           }
+          continue;
         }
       }
-
       if (event.type === "postback") {
         console.log("[LINE Webhook] Postback received:", event.postback.data);
         try {
@@ -874,8 +887,9 @@ async function startServer() {
           
           console.log(`[LINE Webhook] Action: ${action}, ID: ${withdrawId}, AppId: ${appIdFromParams}, User: ${userId}`);
 
+          const firestore = initAdmin();
           if (!firestore) {
-            console.error("[LINE Webhook] Firestore not initialized");
+            console.error("[LINE Webhook] Firebase Admin not initialized");
             continue;
           }
 
@@ -897,8 +911,7 @@ async function startServer() {
           }
 
           if (action && withdrawId) {
-            const docPath = `artifacts/${appId}/public/data/withdrawals/${withdrawId}`;
-            const docRef = firestore.doc(docPath);
+            const docRef = firestore.doc(`artifacts/${appId}/public/data/withdrawals/${withdrawId}`);
             
             try {
               const result = await firestore.runTransaction(async (t) => {
@@ -926,7 +939,7 @@ async function startServer() {
                     approvedByName: approverName,
                     clearanceDeadline: deadlineIso
                   };
-                  t.update(docRef, updateData);
+                  t.update(docRef, updateData as any);
                   return { success: true, action: "approve", data: { ...data, ...updateData }, approverName };
                 } else if (action === "reject") {
                   const updateData = { 
@@ -935,7 +948,7 @@ async function startServer() {
                     approvedByName: approverName,
                     rejectedAt: now
                   };
-                  t.update(docRef, updateData);
+                  t.update(docRef, updateData as any);
                   return { success: true, action: "reject", data: { ...data, ...updateData }, approverName };
                 }
                 return { error: "unknown_action" };
@@ -1048,10 +1061,7 @@ async function startServer() {
       sevenDaysLater.setDate(now.getDate() + 7);
 
       const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
-      // We check for approved ones and filter the rest in memory to avoid composite index requirement
-      const snap = await withdrawalsRef
-        .where("status", "==", "approved")
-        .get();
+      const snap = await withdrawalsRef.where("status", "==", "approved").get();
 
       const overdueItems = snap.docs.filter(doc => {
         const data = doc.data();

@@ -984,6 +984,9 @@ export default function App() {
     testConnection();
 
     const initAuth = async (retries = 3) => {
+      // If already signed in, no need to do anything
+      if (auth.currentUser) return;
+
       try {
         await signInAnonymously(auth);
       } catch (e: any) {
@@ -992,19 +995,26 @@ export default function App() {
         
         if (errCode === 'auth/admin-restricted-operation') {
           console.warn("Anonymous Auth is disabled in Firebase Console.");
-          alert(" ระบบยืนยันตัวตนล้มเหลว: Anonymous Authentication ถูกปิดใช้งานใน Firebase Console\n\nกรุณาไปที่ Firebase Console > Authentication > Sign-in method แล้วเปิดใช้งาน 'Anonymous' เพื่อให้แอปทำงานได้ปกติ");
-          return; // Stop retrying for this specific error
+          alert("ระบบยืนยันตัวตนล้มเหลว: Anonymous Authentication ถูกปิดใช้งานใน Firebase Console\n\nกรุณาไปที่ Firebase Console > Authentication > Sign-in method แล้วเปิดใช้งาน 'Anonymous' เพื่อให้แอปทำงานได้ปกติ");
+          return;
+        }
+
+        if (errCode === 'auth/too-many-requests') {
+          console.warn("Too many authentication requests. Retrying with longer delay...");
+          if (retries > 0) {
+            setTimeout(() => initAuth(retries - 1), 10000); // 10 seconds for rate limit
+          }
+          return;
         }
 
         console.error(`Auth Attempt Failed (Retries left: ${retries}):`, e);
 
         if (retries > 0) {
-          setTimeout(() => initAuth(retries - 1), 2000);
+          const delay = (4 - retries) * 2000; // Exponential-ish backoff
+          setTimeout(() => initAuth(retries - 1), delay);
         } else {
           if (errMsg.includes('network-request-failed')) {
-            alert(" ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือปิด Adblocker แล้วลองใหม่อีกครั้ง");
-          } else {
-            alert(" ระบบยืนยันตัวตนล้มเหลว: " + errMsg);
+            alert("ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต");
           }
         }
       }
@@ -3195,16 +3205,22 @@ export default function App() {
                           onChange={e => setNewApproverName(e.target.value)}
                         />
                         <button 
-                          onClick={() => {
+                          onClick={async () => {
                             if (newLineId.trim() && newApproverName.trim()) {
                               const current = systemConfigs.approvers || [];
                               if (!current.some(a => a.lineId === newLineId.trim())) {
-                                setSystemConfigs({
+                                const newConfigs = {
                                   ...systemConfigs, 
                                   approvers: [...current, { lineId: newLineId.trim(), name: newApproverName.trim() }]
-                                });
+                                };
+                                setSystemConfigs(newConfigs);
                                 setNewLineId('');
                                 setNewApproverName('');
+                                try {
+                                  await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), newConfigs);
+                                } catch (e) {
+                                  console.error(e);
+                                }
                               } else {
                                 alert("ID นี้มีอยู่ในรายชื่อแล้ว");
                               }
@@ -3227,10 +3243,18 @@ export default function App() {
                           <span className="text-[8px] font-bold font-mono text-slate-400">{appr.lineId.slice(0, 8)}...{appr.lineId.slice(-4)}</span>
                         </div>
                         <button 
-                          onClick={() => setSystemConfigs({
-                            ...systemConfigs, 
-                            approvers: (systemConfigs.approvers || []).filter(a => a.lineId !== appr.lineId)
-                          })}
+                          onClick={async () => {
+                            const newConfigs = {
+                              ...systemConfigs, 
+                              approvers: (systemConfigs.approvers || []).filter(a => a.lineId !== appr.lineId)
+                            };
+                            setSystemConfigs(newConfigs);
+                            try {
+                              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), newConfigs);
+                            } catch(e) {
+                              console.error(e);
+                            }
+                          }}
                           className="w-8 h-8 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center transition-all hover:bg-rose-500 hover:text-white"
                         ><X className="w-4 h-4" /></button>
                       </div>
