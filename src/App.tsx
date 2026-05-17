@@ -8,15 +8,16 @@ import {
   Tags, ChevronDown, Paperclip, FileUp, Save
 } from 'lucide-react';
 import { 
-  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc, getDocFromServer
+  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc, getDocFromServer,
+  query, orderBy, limit
 } from 'firebase/firestore';
 import { 
   signInAnonymously, onAuthStateChanged 
 } from 'firebase/auth';
 import { db, auth } from './lib/firebase';
-import * as XLSX from 'xlsx';
 import { handleFirestoreError, OperationType } from './lib/firestore-errors';
 import { Withdrawal, Receipt, SystemConfigs, BankAccount } from './types';
+import { INITIAL_EMPLOYEES, INITIAL_PROJECTS, INITIAL_CATEGORIES } from './constants';
 
 interface StaffRecord {
   nickname: string;
@@ -30,59 +31,6 @@ import { WeeklyReportUI } from './components/WeeklyReportUI';
 const appId = 'advance-system-v3'; 
 
 // --- 3. Constants & Helpers ---
-const INITIAL_EMPLOYEES = [
-  "สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน",
-  "นันทวัฒน์ ม้าแก้ว", "ศรายุทธ แก้วมณี", "ชัยรัตน์ จิตร์งาม", "อธิภัทร ชาติไทย", "เกียรติกุล มาดี"
-];
-const INITIAL_PROJECTS = [
-  "คุณแฮม ลัดดาวรรณ (K.HAM LADDAWAN)",
-  "คุณเตชิน (K TACHIN)",
-  "คุณตะกร้อ กาญจนบุรี (K TAKOR KANCHANABURI)",
-  "คุณตุ๊ก เขาค้อ (K.TOOK KHAO KOH)",
-  "พลัส เพชรเกษม หาดใหญ่ (PLUS PHETKASEM HADYAI)",
-  "สวนหลวง เรสซิเดนซ์ (SUANLUNG RESIDENCE)",
-  "คุณยุ้ย เรสซิเดนซ์ (K.YUI RESIDENCE)",
-  "มอน เอคโค่ 1 ลาดกระบัง (MON ECHO1 LADKRABANG)",
-  "คุณนิมิต งานถมดิน",
-  "คุณเอ็ดดี้ ปรับปรุงอาคารสำนักงาน",
-  "จีเอ็มที เฮาส์ (GMT HOUSE)",
-  "โปรเฮาส์ คุณมะเหมี่ยว เฉลิมพระเกียรติ 30",
-  "อาณา เอกมัย (ARNA EKKAMAI)",
-  "รายา บางเทา ภูเก็ต แปลง 12A",
-  "กรีน เอเชีย เชียงใหม่ (GREEN ASIA CHIANG MAI)",
-  "รายา บางโจ ภูเก็ต แปลง 18",
-  "พลัส หาดใหญ่ (PLUS HADYAI)",
-  "งานออกแบบ พลัส ยูดี มิดทาวน์ (PLUS UD MIDTOWN)",
-  "คุณเก่ง พระราม 9 เรสซิเดนซ์",
-  "คุณปิ เชียงใหม่",
-  "ชะอำ วิลล่า (สำรวจโครงสร้างอาคารเดิมและการรับน้ำหนัก)",
-  "ชะอำ วิลล่า (สำรวจพื้นที่โครงการ)",
-  "โรงเรียนนายร้อยตำรวจ อ.สามพราน จ.นครปฐม",
-  "ทีโอเอ ทีทีเอฟ สถาปนิก เอ็กซ์โป (TOA TTF ARCHITECT EXPO)",
-  "รายา บางเทา ภูเก็ต แปลง 11",
-  "โรงแรมสุนัข (DOG HOTEL)",
-  "เอ็มดีเอช เรสซิเดนซ์ (MDH RESIDENCE)",
-  "คุณเอ็กซ์ บ้านโป่ง",
-  "ริชเชอร์ เจ โฮเทล (ล็อบบี้)",
-  "พีที เฮาส์ (งานตกแต่งภายใน)",
-  "คุณบีม เรสซิเดนซ์",
-  "หอประชุมสารสาสน์ (AUDITORIUM SARASAS)",
-  "สำนักงาน ยูนิกซ์เดฟ (UNIXDEV OFFICE)",
-  "สมาร์ท คอนโด โรจนะ อยุธยา (SMYNE CONDO ROJJANA AYUTTHAYA)",
-  "เอเชีย ธนามล กรุ๊ป",
-  "สารสาสน์ (ล็อบบี้)",
-  "บ้านอิสสระ พระราม 9",
-  "177 ศุภาลัย สุวรรณภูมิ",
-  "ทีทีที เฮาส์ (TTT HOUSE)",
-  "คุณโบว์ ลัดดาลักษณ์ ราชพฤกษ์",
-  "นิด้า ชั้น 1 อินโนเวชั่น (NIDA FL.1 INNOVATION)",
-  "คุณเนย ปัญญา เรสซิเดนซ์",
-  "คุณแม็กซ์ เรสซิเดนซ์",
-  "โรสเตอร์ รูม ชั้น 5 เซ็นทรัล เอ็มบาสซี",
-  "คุณทิพย์ สาทร",
-  "โรงงานรีไซเคิล คุณวิจิตร"
-];
-const INITIAL_CATEGORIES = ["ค่าเดินทาง/น้ำมัน", "ค่าอาหาร/รับรอง", "ค่าที่พัก", "ค่าวัสดุอุปกรณ์", "ค่าแรง/ค่าบริการ", "อื่นๆ"];
 
 const notifyLine = async (message: string, type: 'text' | 'flex' = 'text', flexData?: any) => {
   try {
@@ -780,6 +728,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('history'); 
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   
   const [aiUsage, setAiUsage] = useState({ ocrCount: 0, lineCount: 0, requestCount: 0 });
@@ -923,13 +872,31 @@ export default function App() {
           console.error("Failed to initialize usage doc:", err);
         });
       }
-    }, (error) => handleFirestoreError(error, OperationType.GET, 'system_configs/usage'));
+    }, (error) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('Quota limit exceeded')) {
+        setLoadError("โควตาฐานข้อมูลเต็ม (Quota Exceeded) - ระบบอาจทำงานได้ไม่สมบูรณ์ในขณะนี้");
+      }
+      handleFirestoreError(error, OperationType.GET, 'system_configs/usage');
+    });
 
     const withdrawalsPath = `artifacts/${appId}/public/data/withdrawals`;
-    const unsubW = onSnapshot(collection(db, withdrawalsPath), (snap) => {
+    const q = query(
+      collection(db, withdrawalsPath), 
+      orderBy('createdAt', 'desc'), 
+      limit(100)
+    );
+    const unsubW = onSnapshot(q, (snap) => {
       setWithdrawals(snap.docs.map(d => ({ id: d.id, ...d.data() } as Withdrawal)));
       setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.GET, withdrawalsPath));
+    }, (error) => {
+      setLoading(false);
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('Quota limit exceeded')) {
+        setLoadError("โควตาฐานข้อมูลเต็ม (Quota Exceeded) - ระบบอาจไม่สามารถโหลดข้อมูลรายการเบิกได้");
+      }
+      handleFirestoreError(error, OperationType.GET, withdrawalsPath);
+    });
 
     const configsPath = `artifacts/${appId}/public/data/system_configs`;
     const unsubC = onSnapshot(collection(db, configsPath), (snap) => {
@@ -1315,6 +1282,7 @@ export default function App() {
       reader.onload = async (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const XLSX = await import('xlsx');
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
@@ -1360,6 +1328,7 @@ export default function App() {
       reader.onload = async (e) => {
         try {
           const data = new Uint8Array(e.target?.result as ArrayBuffer);
+          const XLSX = await import('xlsx');
           const workbook = XLSX.read(data, { type: 'array' });
           const firstSheetName = workbook.SheetNames[0];
           const worksheet = workbook.Sheets[firstSheetName];
@@ -1901,6 +1870,17 @@ export default function App() {
       setIsBusy(false);
     }
   };
+
+  if (loadError) {
+    return (
+      <div className="h-screen flex flex-col items-center justify-center bg-slate-50 p-6 text-center">
+        <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
+        <h2 className="text-sm font-black text-slate-800 uppercase mb-2">System Error</h2>
+        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest max-w-xs">{loadError}</p>
+        <button onClick={() => window.location.reload()} className="mt-6 bg-[#0F172A] text-white px-8 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg active:scale-95">Retry Loading</button>
+      </div>
+    );
+  }
 
   if (loading) return <div className="h-screen flex flex-col items-center justify-center bg-slate-50 gap-4"><Loader2 className="w-10 h-10 animate-spin text-blue-600"/><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Loading System...</p></div>;
 
