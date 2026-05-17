@@ -25,45 +25,16 @@ const initAdmin = () => {
   try {
     if (!admin.apps.length) {
       const sa = process.env.FIREBASE_SERVICE_ACCOUNT;
-      if (sa && sa.trim().startsWith("{")) {
+      if (sa) {
         try {
           const config = JSON.parse(sa);
-          admin.initializeApp({
-            credential: admin.credential.cert(config)
-          });
-          console.log("[Firebase Admin] Initialized with Service Account");
+          admin.initializeApp({ credential: admin.credential.cert(config) });
         } catch (e) {
-          console.error("Invalid FIREBASE_SERVICE_ACCOUNT JSON:", e);
+          console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT, falling back to default:", e);
           admin.initializeApp();
         }
       } else {
-        // Safe default: try application default credentials if in GCP, else just projectId
-        try {
-          const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-          if (fs.existsSync(configPath)) {
-            const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
-            console.log(`[Firebase Admin] Initializing with Project ID: ${config.projectId}`);
-            admin.initializeApp({
-              projectId: config.projectId,
-              credential: admin.credential.applicationDefault()
-            });
-          } else {
-            admin.initializeApp({
-              credential: admin.credential.applicationDefault()
-            });
-          }
-        } catch (e) {
-          // If applicationDefault() fails
-          try {
-            const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-            const projectId = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")).projectId : undefined;
-            console.log(`[Firebase Admin] Fallback to basic Project ID: ${projectId}`);
-            admin.initializeApp({ projectId });
-          } catch (e2) {
-            console.error("[Firebase Admin] Final fallback failed", e2);
-            admin.initializeApp();
-          }
-        }
+        admin.initializeApp();
       }
     }
 
@@ -80,7 +51,6 @@ const initAdmin = () => {
     } catch (e) { /* ignore */ }
 
     db = databaseId ? getFirestore(databaseId) : getFirestore();
-    db.settings({ ignoreUndefinedProperties: true });
     return db;
   } catch (err) {
     if (!authFailed) {
@@ -113,43 +83,36 @@ async function startServer() {
 
   // Health check
   app.get("/api/health", (req, res) => {
+    console.log("Health check hit");
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
   // Helpers for usage tracking
   const incrementUsage = async (field: "ocrCount" | "lineCount" | "requestCount") => {
     if (authFailed) return;
-    
-    // If no service account and explicitly checking for requestCount (heartbeat), 
-    // we can skip trying if we've already seen failures or if we know we're in a restricted dev env
-    if (field === "requestCount" && !process.env.FIREBASE_SERVICE_ACCOUNT && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
-      // We'll try once, but if it fails we stop.
-    }
-
     const firestore = initAdmin();
-    if (!firestore) {
-      if (field !== "requestCount") console.warn(`Firebase Admin not initialized. Skipping ${field} tracking.`);
-      return;
-    }
-
+    if (!firestore) return;
     const appId = process.env.APP_ID || "advance-system-v3";
     const usageRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/usage`);
-    
     try {
-      await usageRef.set({ [field]: admin.firestore.FieldValue.increment(1) }, { merge: true });
+      // Use a single set with increment. set(..., {merge: true}) should create the doc if it doesn't exist.
+      await usageRef.set({ 
+        [field]: admin.firestore.FieldValue.increment(1),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp()
+      }, { merge: true });
     } catch (err: any) {
-      // If we get an unauthenticated error (16) or PERMISSION_DENIED (7), stop trying to avoid spamming logs
-      const isUnauth = err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"));
-      const isDenied = err.code === 7 || (err.message && err.message.includes("PERMISSION_DENIED"));
-      if (isUnauth || isDenied) {
+      // Handle permission or non-found errors
+      if (err.code === 16 || (err.message && err.message.includes("UNAUTHENTICATED"))) {
         if (!authFailed) {
-          // Log only once per server lifetime
-          console.info(`[Usage Tracking] Permission/Auth failed for ${field} (code: ${err.code}). Disabling tracking to save resources.`);
+          console.error(`Firebase Auth failed for ${field}. Usage tracking disabled.`, err.message);
           authFailed = true;
         }
+      } else if (err.code === 5 || err.message?.includes("NOT_FOUND")) {
+        // If not found, it might be the database or the project ID configuration.
+        // We log a clear message but don't crash.
+        console.warn(`Firestore Not Found for ${field} at ${usageRef.path}. This often means the databaseId in firebase-applet-config.json is incorrect or doesn't exist in the current project.`);
       } else {
-        // For other errors, log but maybe don't kill everything unless it's a pattern
-        console.warn(`[Usage Tracking] Error incrementing ${field}:`, err.message || err);
+        console.error(`Error incrementing ${field} at ${usageRef.path}:`, err);
       }
     }
   };
@@ -224,34 +187,49 @@ async function startServer() {
 
     try {
       const imageData = image.includes(",") ? image.split(",")[1] : image;
-      const response = await genai.models.generateContent({
+      const result = await genai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: {
-          parts: [
-            { text: "ช่วยดึงชื่อร้านค้า และยอดเงินรวมจากสลิปนี้ให้หน่อย (Extract store name and total amount)" },
-            {
-              inlineData: {
-                mimeType: "image/jpeg",
-                data: imageData
+        contents: [
+          {
+            parts: [
+              { text: "ช่วยดึงชื่อร้านค้า, ยอดเงินรวม และข้อมูลที่ระบุในบันทึกหรือหมายเหตุจากสลิปนี้ให้หน่อย (Extract store name, total amount, and any notes/remarks/memo from this receipt)" },
+              {
+                inlineData: {
+                  mimeType: "image/jpeg",
+                  data: imageData
+                }
               }
-            }
-          ]
-        },
+            ]
+          }
+        ],
         config: {
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
             properties: {
               name: { type: Type.STRING },
-              amount: { type: Type.NUMBER }
+              amount: { type: Type.NUMBER },
+              description: { type: Type.STRING, description: "บันทึกช่วยจำหรือหมายเหตุที่ระบุในสลิป (Remarks/Notes/Memo)" }
             },
             required: ["name", "amount"]
           }
         }
       });
-      res.json(JSON.parse(response.text || '{}'));
+      
+      const text = result.text || '{}';
+      const parsed = JSON.parse(text);
+      
+      // Ensure no undefined fields are returned
+      const safeResponse = {
+        name: parsed.name || 'Unknown Item',
+        amount: Number(parsed.amount) || 0,
+        description: parsed.description || ''
+      };
+      
+      res.json(safeResponse);
       await incrementUsage("ocrCount");
     } catch (err) {
+      console.error("AI Extraction Error:", err);
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -387,7 +365,7 @@ async function startServer() {
       }
     };
 
-    const createResultFlex = (title: string, color: string, data: any, statusLabel: string, deadline?: string, buttonConfig?: { label: string, url: string }) => {
+    const createResultFlex = (title: string, color: string, data: any, statusLabel: string, deadline?: string, buttons?: { label: string, url?: string, text?: string }[]) => {
       const bodyContents: any[] = [
         {
           type: "box",
@@ -402,7 +380,7 @@ async function startServer() {
             },
             {
               type: "text",
-              text: statusLabel,
+              text: statusLabel || " ",
               size: "xs",
               color: color,
               weight: "bold",
@@ -468,7 +446,7 @@ async function startServer() {
             type: "box",
             layout: "horizontal",
             contents: [
-              { type: "text", text: `• ${it.name}`, size: "xxs", color: "#475569", flex: 7 },
+              { type: "text", text: `• ${it.name || " "}`, size: "xxs", color: "#475569", flex: 7, wrap: true },
               { type: "text", text: `฿${(Number(it.amount) || 0).toLocaleString()}`, size: "xxs", color: "#1e293b", weight: "bold", flex: 3, align: "end" }
             ]
           }))
@@ -476,44 +454,18 @@ async function startServer() {
       }
 
       // Add Bank Info
-      if (data.bankAccount) {
+      if (data.bankAccount && (data.bankAccount.bankName || data.bankAccount.accountNumber || data.bankAccount.accountName)) {
         bodyContents.push({ type: "separator", margin: "md" });
         bodyContents.push({
           type: "box",
           layout: "vertical",
           margin: "md",
+          backgroundColor: "#F8FAFC",
           paddingAll: "sm",
-          backgroundColor: "#F1F5F9",
-          cornerRadius: "md",
           contents: [
-            { type: "text", text: "💰 ข้อมูลบัญชีสำหรับโอนเงิน", size: "xxs", color: "#475569", weight: "bold" },
-            { 
-              type: "box", 
-              layout: "horizontal", 
-              margin: "sm",
-              contents: [
-                { type: "text", text: "ธนาคาร", size: "xxs", color: "#64748B", flex: 2 },
-                { type: "text", text: data.bankAccount.bankName || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
-              ] 
-            },
-            { 
-              type: "box", 
-              layout: "horizontal", 
-              margin: "xs",
-              contents: [
-                { type: "text", text: "เลขบัญชี", size: "xxs", color: "#64748B", flex: 2 },
-                { type: "text", text: data.bankAccount.accountNumber || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
-              ] 
-            },
-            { 
-              type: "box", 
-              layout: "horizontal", 
-              margin: "xs",
-              contents: [
-                { type: "text", text: "ชื่อบัญชี", size: "xxs", color: "#64748B", flex: 2 },
-                { type: "text", text: data.bankAccount.accountName || "-", size: "xxs", color: "#0F172A", weight: "bold", flex: 5, align: "end" }
-              ] 
-            }
+            { type: "text", text: "โอนเข้าบัญชี (Transfer to):", size: "xxs", color: "#94A3B8", weight: "bold" },
+            { type: "text", text: `${data.bankAccount.bankName || ""} ${data.bankAccount.accountNumber || ""}`.trim() || "-", size: "xs", color: "#1E293B", weight: "bold", margin: "xs" },
+            { type: "text", text: data.bankAccount.accountName || "-", size: "xs", color: "#475569", margin: "xs" }
           ]
         });
       }
@@ -535,7 +487,7 @@ async function startServer() {
             },
             {
               type: "text",
-              text: title,
+              text: title || " ",
               color: "#FFFFFF",
               weight: "bold",
               size: "sm"
@@ -550,55 +502,50 @@ async function startServer() {
         }
       };
 
-      const footerContents: any[] = [];
+      const footerButtons: any[] = [];
       
-      // Copy button if bank exists
-      if (data.bankAccount) {
-        footerContents.push({
+      // Auto-add copy button if bank info exists (requested for easy copying in LINE for approved items)
+      if (data.bankAccount && data.bankAccount.accountNumber) {
+        footerButtons.push({
           type: "button",
           style: "secondary",
           height: "sm",
-          margin: "sm",
           action: {
-            type: "clipboard",
-            label: "คัดลอกเลขบัญชี",
-            clipboardText: data.bankAccount.accountNumber.replace(/-/g, '')
-          }
-        });
-        footerContents.push({
-          type: "button",
-          style: "secondary",
-          height: "sm",
-          margin: "xs",
-          action: {
-            type: "clipboard",
-            label: "คัดลอกชื่อบัญชี",
-            clipboardText: data.bankAccount.accountName
-          }
+            type: "message",
+            label: `คัดลอกเลขบัญชี`,
+            text: data.bankAccount.accountNumber
+          },
+          margin: "sm"
         });
       }
 
-      if (buttonConfig) {
-        footerContents.push({
-          type: "button",
-          style: "primary",
-          color: color,
-          height: "sm",
-          margin: "md",
-          action: {
-            type: "uri",
-            label: buttonConfig.label,
-            uri: buttonConfig.url
-          }
+      if (buttons && buttons.length > 0) {
+        buttons.forEach(btn => {
+          footerButtons.push({
+            type: "button",
+            style: "primary",
+            color: color,
+            height: "sm",
+            action: btn.url ? {
+              type: "uri",
+              label: btn.label,
+              uri: btn.url
+            } : {
+              type: "message",
+              label: btn.label,
+              text: btn.text
+            },
+            margin: "sm"
+          });
         });
       }
 
-      if (footerContents.length > 0) {
+      if (footerButtons.length > 0) {
         bubble.footer = {
           type: "box",
           layout: "vertical",
-          spacing: "xs",
-          contents: footerContents
+          spacing: "sm",
+          contents: footerButtons
         };
       }
 
@@ -615,7 +562,6 @@ async function startServer() {
         const replyToken = event.replyToken;
         const userId = event.source.userId;
 
-        const firestore = initAdmin();
         if (!firestore) continue;
         const appId = process.env.APP_ID || "advance-system-v3";
         const configsRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
@@ -704,9 +650,9 @@ async function startServer() {
                     color: "#267F8C",
                     height: "sm",
                     action: {
-                      type: "postback",
+                      type: "uri",
                       label: "อนุมัติ",
-                      data: `action=approve&id=${data.id}&appId=${appId}`
+                      uri: `${webAppUrl}?approve=${data.id}`
                     }
                   },
                   {
@@ -740,10 +686,7 @@ async function startServer() {
 
         if (text.includes("รออนุมัติ")) {
           try {
-            const firestore = initAdmin();
-            if (!firestore) continue;
-            const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
-            const snap = await withdrawalsRef.where("status", "==", "pending").get();
+            const snap = await firestore.collection(`artifacts/${appId}/public/data/withdrawals`).where("status", "==", "pending").limit(10).get();
             if (snap.empty) {
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "✨ ไม่มีรายการค้างอนุมัติในขณะนี้" }]);
               continue;
@@ -765,11 +708,31 @@ async function startServer() {
 
         if (text.includes("สถานะ")) {
           if (replyToken) {
-            await replyMessage(replyToken, [{ type: "text", text: "✅ ระบบเชื่อมต่อกับ Firebase สำเร็จ" }]);
+            await replyMessage(replyToken, [{ type: "text", text: "🔎 กรุณาพิมพ์เลขที่เอกสาร (เช่น ADV-260505-001) เพื่อตรวจสอบสถานะครับ" }]);
           }
           continue;
         }
 
+        // Match Advance ID (Public Status Lookup)
+        if (/^ADV-\d{6}-\d{3}$/.test(text)) {
+          try {
+            const snap = await firestore.collection(`artifacts/${appId}/public/data/withdrawals`).where("advanceId", "==", text).get();
+            if (snap.empty) {
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${text}` }]);
+              continue;
+            }
+            const data = snap.docs[0].data();
+              if (replyToken) {
+                const statusMap: any = { pending: "รออนุมัติ", approved: "อนุมัติแล้ว", rejected: "ปฏิเสธ/ไม่อนุมัติ" };
+                const colorMap: any = { pending: "#F59E0B", approved: "#10B981", rejected: "#EF4444" };
+                const flex = createResultFlex("ตรวจสอบข้อมูล", colorMap[data.status] || "#64748B", data, statusMap[data.status] || data.status, data.clearanceDeadline);
+                await replyMessage(replyToken, [flex]);
+              }
+          } catch (e) { console.error("ID lookup error:", e); }
+          continue;
+        }
+
+        // Protection logic: if IDs are defined, must be in the list for SENSITIVE ACTIONS
         if (text.startsWith("ไม่อนุมัติ ")) {
           if ((allowedLineIds.length > 0 || approvers.length > 0) && userId) {
             const isLegacyAuth = allowedLineIds.includes(userId);
@@ -777,7 +740,8 @@ async function startServer() {
             if (!isLegacyAuth && !isApproverAuth) {
               if (replyToken) {
                 await replyMessage(replyToken, [
-                  { type: "text", text: "🔒 คุณไม่มีสิทธิ์ในการกดอนุมัติหรือปฏิเสธ" }
+                  { type: "text", text: "🔒 เฉพาะผู้อนุมัติเท่านั้นที่สามารถใช้คำสั่งนี้ได้" },
+                  { type: "text", text: `ID: ${userId}` }
                 ]);
               }
               continue;
@@ -785,98 +749,66 @@ async function startServer() {
           }
 
           const advId = text.replace("ไม่อนุมัติ ", "").trim();
+          // ... rest of logic
           
           try {
-            const firestore = initAdmin();
-            if (!firestore) continue;
             const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
-            const querySnap = await withdrawalsRef.where("advanceId", "==", advId).get();
-            if (querySnap.empty) {
+            const query = await withdrawalsRef.where("advanceId", "==", advId).get();
+
+            if (query.empty) {
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${advId}` }]);
               continue;
             }
-            const docId = querySnap.docs[0].id;
+
+            const docRef = query.docs[0].ref;
+            const data = query.docs[0].data();
+
+            if (data.status !== "pending") {
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `⚠️ รายการนี้ถูกดำเนินการไปแล้ว (${data.status})` }]);
+              continue;
+            }
+
+            const approver = approvers.find((a: any) => a.lineId === userId);
+            const approverName = approver?.name || "ผู้มีอำนาจ";
+
+            await docRef.update({ status: "rejected" });
             
-            const result = await firestore.runTransaction(async (t) => {
-              const docRef = firestore.doc(`artifacts/${appId}/public/data/withdrawals/${docId}`);
-              const docSnap = await t.get(docRef);
-
-              if (!docSnap.exists) return { error: "not_found" };
-
-              const data = docSnap.data() as any;
-
-              if (data.status !== "pending") {
-                return { alreadyProcessed: true, data };
-              }
-
-              const approver = approvers.find((a: any) => a.lineId === userId);
-              const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
-              const now = new Date().toISOString();
-
-              const updateData = { 
-                status: "rejected",
-                approvedBy: userId,
-                approvedByName: approverName,
-                rejectedAt: now
-              };
-              t.update(docRef, updateData as any);
-              return { success: true, data: { ...data, ...updateData }, approverName };
-            });
-
-            if (result.error === "not_found") {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${advId}` }]);
-              continue;
+            // Sync to sheets
+            const sheetsUrl = configs.sheetsUrl;
+            if (sheetsUrl) {
+              await fetch(sheetsUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  id: data.advanceId,
+                  employee: data.employeeName,
+                  amount: data.totalAmount,
+                  projects: (data.projectIds || []).join(", "),
+                  approvedAt: new Date().toISOString(),
+                  status: "Rejected",
+                  clearanceDeadline: ""
+                }),
+              }).catch(e => console.error("Sheets sync error:", e));
             }
 
-            if (result.alreadyProcessed) {
-              const data = result.data;
-              const statusLabel = data?.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
-              const processedBy = data?.approvedByName ? ` โดย ${data.approvedByName}` : '';
-              
-              if (replyToken) {
-                const message = `⚠️ รายการนี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
-                await replyMessage(replyToken, [{ type: "text", text: message }]);
-              }
-              continue;
+            if (replyToken) {
+              const flex = createResultFlex("ผลการดำเนินการ", "#EF4444", data, "ถูกปฏิเสธแล้ว (ผ่านข้อความ)");
+              await replyMessage(replyToken, [flex]);
             }
 
-            if (result.success) {
-              const data = result.data;
-              const approverName = result.approverName;
-
-              // Sync to sheets
-              const sheetsUrl = configs.sheetsUrl;
-              if (sheetsUrl) {
-                await fetch(sheetsUrl, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    id: data.advanceId,
-                    employee: data.employeeName,
-                    amount: data.totalAmount,
-                    projects: (data.projectIds || []).join(", "),
-                    approvedAt: new Date().toISOString(),
-                    status: "Rejected",
-                    approvedBy: approverName,
-                    clearanceDeadline: ""
-                  }),
-                }).catch(e => console.error("Sheets sync error:", e));
-              }
-
-              if (replyToken) {
-                const flex = createResultFlex("ผลการปฏิเสธ", "#EF4444", data, `ถูกปฏิเสธแล้ว โดย ${approverName}`);
-                await replyMessage(replyToken, [flex]);
-              }
-            }
+            // Also notify the main channel about the rejection (like the web does)
+            try {
+              const flexNotify = createResultFlex(`ผลการปฏิเสธ โดย ${approverName}`, "#EF4444", data, "ถูกปฏิเสธแล้ว (ผ่าน LINE)");
+              await sendLineMessage([flexNotify]);
+            } catch (e) { console.error("Notification failed:", e); }
           } catch (err) {
-            console.error("Error in message handler transaction:", err);
-            if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ เกิดข้อผิดพลาดในการประมวลผล กรุณาลองใหม่อีกครั้ง` }]);
+            console.error("Error in message handler:", err);
+            if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ เกิดข้อผิดพลาด: ${(err as Error).message}` }]);
           }
-          continue;
         }
       }
+
       if (event.type === "postback") {
-        console.log("[LINE Webhook] Postback received:", event.postback.data);
         try {
           const params = new URLSearchParams(event.postback.data);
           const action = params.get("action");
@@ -885,13 +817,7 @@ async function startServer() {
           const replyToken = event.replyToken;
           const userId = event.source.userId;
           
-          console.log(`[LINE Webhook] Action: ${action}, ID: ${withdrawId}, AppId: ${appIdFromParams}, User: ${userId}`);
-
-          const firestore = initAdmin();
-          if (!firestore) {
-            console.error("[LINE Webhook] Firebase Admin not initialized");
-            continue;
-          }
+          if (!firestore) continue;
 
           const appId = appIdFromParams || process.env.APP_ID || "advance-system-v3";
           const configsRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
@@ -905,144 +831,110 @@ async function startServer() {
             const isApproverAuth = approvers.some((a: any) => a.lineId === userId);
             
             if (!isLegacyAuth && !isApproverAuth) {
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "🔒 คุณไม่มีสิทธิ์ในการกดอนุมัติหรือปฏิเสธ" }]);
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "🔒 คุณไม่มีสิทธิ์สั่งการผ่านเมนูนี้" }]);
               continue;
             }
           }
 
           if (action && withdrawId) {
-            const docRef = firestore.doc(`artifacts/${appId}/public/data/withdrawals/${withdrawId}`);
-            
-            try {
-              const result = await firestore.runTransaction(async (t) => {
-                const docSnap = await t.get(docRef);
-                if (!docSnap.exists) return { error: "not_found" };
+            const docPath = `artifacts/${appId}/public/data/withdrawals/${withdrawId}`;
+            const docRef = firestore.doc(docPath);
+            const snap = await docRef.get();
 
-                const data = docSnap.data() as any;
-                if (data?.status !== "pending") {
-                  return { alreadyProcessed: true, data };
+            if (!snap.exists) {
+              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${withdrawId}` }]);
+              continue;
+            }
+
+            const data = snap.data();
+            if (data?.status !== "pending") {
+              if (replyToken) {
+                const flex = createResultFlex("แจ้งเตือนสถานะ", "#F59E0B", data, `รายการนี้ถูกดำเนินการไปแล้ว (${data?.status})`);
+                await replyMessage(replyToken, [flex]);
+              }
+              continue;
+            }
+
+            // Sync to Sheets logic
+            const syncToSheets = async (status: string, deadline?: string) => {
+              const systemConfigRef = firestore?.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
+              const configSnap = await systemConfigRef?.get();
+              const sheetsUrl = configSnap?.data()?.sheetsUrl;
+
+              if (sheetsUrl) {
+                try {
+                  await fetch(sheetsUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      id: data.advanceId,
+                      employee: data.employeeName,
+                      amount: data.totalAmount,
+                      projects: (data.projectIds || []).join(", "),
+                      approvedAt: new Date().toISOString(),
+                      status: status,
+                      clearanceDeadline: deadline || ""
+                    }),
+                  });
+                } catch (sheetsErr) {
+                  console.error("Sheets sync error in webhook:", sheetsErr);
                 }
+              }
+            };
 
-                const approver = approvers.find((a: any) => a.lineId === userId);
-                const approverName = approver ? approver.name : "ผู้มีอำนาจ (LINE)";
-                const now = new Date().toISOString();
+            const approver = approvers.find((a: any) => a.lineId === userId);
+            const approverName = approver?.name || "ผู้มีอำนาจ";
 
-                if (action === "approve") {
-                  const deadline = new Date();
-                  deadline.setDate(deadline.getDate() + 30);
-                  const deadlineIso = deadline.toISOString();
-                  
-                  const updateData = { 
-                    status: "approved", 
-                    approvedAt: now,
-                    approvedBy: userId,
-                    approvedByName: approverName,
-                    clearanceDeadline: deadlineIso
-                  };
-                  t.update(docRef, updateData as any);
-                  return { success: true, action: "approve", data: { ...data, ...updateData }, approverName };
-                } else if (action === "reject") {
-                  const updateData = { 
-                    status: "rejected",
-                    approvedBy: userId,
-                    approvedByName: approverName,
-                    rejectedAt: now
-                  };
-                  t.update(docRef, updateData as any);
-                  return { success: true, action: "reject", data: { ...data, ...updateData }, approverName };
-                }
-                return { error: "unknown_action" };
+            if (action === "approve") {
+              const deadline = new Date();
+              deadline.setDate(deadline.getDate() + 30);
+              const deadlineIso = deadline.toISOString();
+              
+              await docRef.update({ 
+                status: "approved", 
+                approvedAt: new Date().toISOString(),
+                clearanceDeadline: deadlineIso
               });
 
-              if (result.error === "not_found") {
-                if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${withdrawId}` }]);
-                continue;
+              await syncToSheets("Approved", deadlineIso);
+
+              if (replyToken) {
+                const appUrl = (configs.webAppUrl || "").replace(/\/$/, "");
+                const flex = createResultFlex(
+                  "ผลการดำเนินการ", 
+                  "#10B981", 
+                  data, 
+                  "ได้รับการอนุมัติแล้ว", 
+                  deadlineIso,
+                  [{ label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${withdrawId}&action=slip` }]
+                );
+                await replyMessage(replyToken, [flex]);
+              }
+              
+              // Also notify the main channel about the approval if it was done via LINE
+              try {
+                const flexNotify = createResultFlex(`ผลการอนุมัติ โดย ${approverName}`, "#10B981", data, "อนุมัติแล้ว (ผ่าน LINE)");
+                await sendLineMessage([flexNotify]);
+              } catch (e) { console.error("Notification failed:", e); }
+
+            } else if (action === "reject") {
+              await docRef.update({ status: "rejected" });
+              await syncToSheets("Rejected");
+              
+              if (replyToken) {
+                const flex = createResultFlex("ผลการดำเนินการ", "#EF4444", data, "ปฏิเสธรายการแล้ว");
+                await replyMessage(replyToken, [flex]);
               }
 
-              if (result.alreadyProcessed) {
-                const data = result.data;
-                const statusLabel = data?.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
-                const processedBy = data?.approvedByName ? ` โดย ${data.approvedByName}` : '';
-                
-                if (replyToken) {
-                  const message = `⚠️ รายการนี้ได้รับการ${statusLabel}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`;
-                  await replyMessage(replyToken, [{ type: "text", text: message }]);
-                }
-                continue;
-              }
-
-              if (result.success) {
-                const data = result.data;
-                const approverName = result.approverName;
-
-                // Sync to Sheets
-                const sheetsUrl = configs.sheetsUrl;
-                if (sheetsUrl) {
-                  try {
-                    await fetch(sheetsUrl, {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        id: data.advanceId,
-                        employee: data.employeeName,
-                        amount: data.totalAmount,
-                        projects: (data.projectIds || []).join(", "),
-                        approvedAt: new Date().toISOString(),
-                        status: result.action === "approve" ? "Approved" : "Rejected",
-                        approvedBy: approverName,
-                        clearanceDeadline: data.clearanceDeadline || ""
-                      }),
-                    });
-                  } catch (e) { console.error("Sheets sync error:", e); }
-                }
-
-                if (replyToken) {
-                  const appUrl = (configs.webAppUrl || process.env.PUBLIC_URL || "").replace(/\/$/, "");
-                  
-                  if (result.action === "approve") {
-                    const flex = createResultFlex(
-                      "อนุมัติสำเร็จ", 
-                      "#10B981", 
-                      data, 
-                      `Approved by ${approverName}`, 
-                      data.clearanceDeadline,
-                      appUrl ? { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${withdrawId}&action=slip` } : undefined
-                    );
-                    await replyMessage(replyToken, [flex]);
-                  } else {
-                    const flex = createResultFlex(
-                      "ปฏิเสธสำเร็จ", 
-                      "#EF4444", 
-                      data, 
-                      `Rejected by ${approverName}`
-                    );
-                    await replyMessage(replyToken, [flex]);
-                  }
-                }
-              }
-            } catch (err) {
-              console.error("Postback transaction error:", err);
-              if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "❌ เกิดข้อผิดพลาดในการประมวลผล กรุณาลองใหม่อีกครั้ง" }]);
+              // Also notify the main channel about the rejection
+              try {
+                const flexNotify = createResultFlex(`ผลการปฏิเสธ โดย ${approverName}`, "#EF4444", data, "ถูกปฏิเสธแล้ว (ผ่าน LINE)");
+                await sendLineMessage([flexNotify]);
+              } catch (e) { console.error("Notification failed:", e); }
             }
           }
-        } catch (err: any) {
+        } catch (err) {
           console.error("Webhook processing error:", err);
-          // If we have a reply token, try to send the error back to help debugging
-          try {
-            if (event.replyToken) {
-               await fetch("https://api.line.me/v2/bot/message/reply", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  Authorization: `Bearer ${process.env.LINE_CHANNEL_ACCESS_TOKEN}`,
-                },
-                body: JSON.stringify({ 
-                  replyToken: event.replyToken, 
-                  messages: [{ type: "text", text: `❌ Webhook Error: ${err.message}` }] 
-                }),
-              });
-            }
-          } catch (replyErr) { /* ignore */ }
         }
       }
     }
@@ -1061,7 +953,10 @@ async function startServer() {
       sevenDaysLater.setDate(now.getDate() + 7);
 
       const withdrawalsRef = firestore.collection(`artifacts/${appId}/public/data/withdrawals`);
-      const snap = await withdrawalsRef.where("status", "==", "approved").get();
+      // We check for approved ones and filter the rest in memory to avoid composite index requirement
+      const snap = await withdrawalsRef
+        .where("status", "==", "approved")
+        .get();
 
       const overdueItems = snap.docs.filter(doc => {
         const data = doc.data();

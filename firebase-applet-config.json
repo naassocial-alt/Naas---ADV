@@ -1,10 +1,10 @@
 {
-  "projectId": "advnaas-ad273",
-  "appId": "1:852580661481:web:4e0767bfcf1d9d5d781878",
-  "apiKey": "AIzaSyA5H5E86sWpNEmg7XvPxrF8_FfCMnGUOV8",
-  "authDomain": "advnaas-ad273.firebaseapp.com",
-  "databaseURL": "https://advnaas-ad273-default-rtdb.asia-southeast1.firebasedatabase.app",
-  "storageBucket": "advnaas-ad273.firebasestorage.app",
-  "messagingSenderId": "852580661481",
-  "measurementId": "G-YS5JNCPYF7"
+  "projectId": "gen-lang-client-0966193796",
+  "appId": "1:1059512423071:web:9a8b694f6c4558513088aa",
+  "apiKey": "AIzaSyC8o6o3-LU0UxRXatAQgOnHBWobAn3r7gk",
+  "authDomain": "gen-lang-client-0966193796.firebaseapp.com",
+  "firestoreDatabaseId": "ai-studio-7cbfa41d-54cc-4e53-9a9b-5eab43d4b773",
+  "storageBucket": "gen-lang-client-0966193796.firebasestorage.app",
+  "messagingSenderId": "1059512423071",
+  "measurementId": ""
 }

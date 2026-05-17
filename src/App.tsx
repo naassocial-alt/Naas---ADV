@@ -5,9 +5,8 @@ import {
   CheckCircle2, XCircle, Search, Loader2, AlertTriangle, Trash2, Edit,
   Image as ImageIcon, ScanLine, User, PieChart, Settings, UserPlus, Zap,
   X, FileText, Calendar, AlertCircle, Activity, MessageSquare, Server as ServerIcon,
-  Tags, ChevronDown, Paperclip, FileUp
+  Tags, ChevronDown, Paperclip, FileUp, Save
 } from 'lucide-react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { 
   collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc, getDocFromServer
 } from 'firebase/firestore';
@@ -31,13 +30,6 @@ import { WeeklyReportUI } from './components/WeeklyReportUI';
 const appId = 'advance-system-v3'; 
 
 // --- 3. Constants & Helpers ---
-const cleanData = (obj: any) => {
-  const newObj = { ...obj };
-  Object.keys(newObj).forEach(key => {
-    if (newObj[key] === undefined) delete newObj[key];
-  });
-  return newObj;
-};
 const INITIAL_EMPLOYEES = [
   "สมชาย มั่นคง", "วิภา มีสุข", "ธนากร งานดี", "กาญจนา เรืองโพน", "ปิยะพงษ์ ผิวอ่อน",
   "นันทวัฒน์ ม้าแก้ว", "ศรายุทธ แก้วมณี", "ชัยรัตน์ จิตร์งาม", "อธิภัทร ชาติไทย", "เกียรติกุล มาดี"
@@ -122,6 +114,32 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
   // Normalize URL: remove trailing slash
   const appUrl = appBaseUrl.replace(/\/$/, '');
 
+  const footerButtons: any[] = [];
+  
+  footerButtons.push({
+    type: "button",
+    style: "primary",
+    color: "#267F8C",
+    height: "sm",
+    action: {
+      type: "uri",
+      label: "อนุมัติ",
+      uri: `${appUrl}?approve=${data.id}`
+    }
+  });
+
+  footerButtons.push({
+    type: "button",
+    style: "primary",
+    color: "#E53935",
+    height: "sm",
+    action: {
+      type: "postback",
+      label: "ไม่อนุมัติ",
+      data: `action=reject&id=${data.id}&appId=${appId}`
+    }
+  });
+
   return {
     type: "flex",
     altText: `รายการใหม่จาก ${data.employeeName}: ${data.advanceId}`,
@@ -163,44 +181,16 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "รหัสรายการ",
-                size: "sm",
-                color: "#888888",
-                flex: 4
-              },
-              {
-                type: "text",
-                text: data.advanceId,
-                size: "sm",
-                color: "#111111",
-                weight: "bold",
-                flex: 6,
-                align: "end"
-              }
+              { type: "text", text: "รหัสรายการ", size: "sm", color: "#888888", flex: 4 },
+              { type: "text", text: data.advanceId, size: "sm", color: "#111111", weight: "bold", flex: 6, align: "end" }
             ]
           },
           {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "พนักงาน",
-                size: "sm",
-                color: "#888888",
-                flex: 4
-              },
-              {
-                type: "text",
-                text: data.employeeName,
-                size: "sm",
-                color: "#111111",
-                weight: "bold",
-                flex: 6,
-                align: "end"
-              }
+              { type: "text", text: "พนักงาน", size: "sm", color: "#888888", flex: 4 },
+              { type: "text", text: data.employeeName, size: "sm", color: "#111111", weight: "bold", flex: 6, align: "end" }
             ],
             margin: "md"
           },
@@ -208,21 +198,8 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "โปรเจค",
-                size: "sm",
-                color: "#888888",
-                flex: 4
-              },
-              {
-                type: "text",
-                text: (data.projectIds || []).join(", ") || "-",
-                size: "sm",
-                color: "#111111",
-                flex: 6,
-                align: "end"
-              }
+              { type: "text", text: "โปรเจค", size: "sm", color: "#888888", flex: 4 },
+              { type: "text", text: (data.projectIds || []).join(", ") || "-", size: "sm", color: "#111111", flex: 6, align: "end" }
             ],
             margin: "md"
           },
@@ -230,23 +207,28 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "หมวดหมู่ค่าใช้จ่าย",
-                size: "sm",
-                color: "#888888",
-                flex: 5
-              },
-              {
-                type: "text",
-                text: data.items.map(i => i.category || "-").filter((v,i,a) => a.indexOf(v)===i).join(", ") || "-",
-                size: "sm",
-                color: "#111111",
-                flex: 5,
-                align: "end"
-              }
+              { type: "text", text: "หมวดหมู่ค่าใช้จ่าย", size: "sm", color: "#888888", flex: 5 },
+              { type: "text", text: data.items.map(i => i.category || "-").filter((v,i,a) => a.indexOf(v)===i).join(", ") || "-", size: "sm", color: "#111111", flex: 5, align: "end" }
             ],
             margin: "md"
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              { type: "text", text: "โอนเข้าบัญชี", size: "sm", color: "#888888", flex: 4 },
+              { type: "text", text: (data.bankAccount && (data.bankAccount.bankName || data.bankAccount.accountNumber)) ? `${data.bankAccount.bankName || ""} ${data.bankAccount.accountNumber || ""}`.trim() : "-", size: "sm", color: "#111111", flex: 6, align: "end", wrap: true }
+            ],
+            margin: "md"
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              { type: "text", text: "ชื่อบัญชี", size: "sm", color: "#888888", flex: 4 },
+              { type: "text", text: data.bankAccount?.accountName || "-", size: "sm", color: "#111111", flex: 6, align: "end", wrap: true }
+            ],
+            margin: "sm"
           },
           {
             type: "box",
@@ -262,23 +244,8 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
                   type: "box",
                   layout: "horizontal",
                   contents: [
-                    {
-                      type: "text",
-                      text: `${idx + 1}. ${item.name}`,
-                      size: "xs",
-                      color: "#555555",
-                      flex: 7,
-                      wrap: true
-                    },
-                    {
-                      type: "text",
-                      text: `฿${(item.amount || 0).toLocaleString()}`,
-                      size: "xs",
-                      color: "#111111",
-                      flex: 3,
-                      align: "end",
-                      weight: "bold"
-                    }
+                    { type: "text", text: `${idx + 1}. ${item.name}`, size: "xs", color: "#555555", flex: 7, wrap: true },
+                    { type: "text", text: `฿${(item.amount || 0).toLocaleString()}`, size: "xs", color: "#111111", flex: 3, align: "end", weight: "bold" }
                   ]
                 },
                 item.projectId ? {
@@ -292,31 +259,13 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
               ]
             }))
           },
-          {
-            type: "separator",
-            margin: "lg",
-            color: "#EEEEEE"
-          },
+          { type: "separator", margin: "lg", color: "#EEEEEE" },
           {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "ยอดขอเบิก",
-                size: "sm",
-                color: "#111111",
-                weight: "bold",
-                gravity: "center"
-              },
-              {
-                type: "text",
-                text: `฿${(data.totalAmount || 0).toLocaleString()}`,
-                size: "xl",
-                color: "#267F8C",
-                weight: "bold",
-                align: "end"
-              }
+              { type: "text", text: "ยอดขอเบิก", size: "sm", color: "#111111", weight: "bold", gravity: "center" },
+              { type: "text", text: `฿${(data.totalAmount || 0).toLocaleString()}`, size: "xl", color: "#267F8C", weight: "bold", align: "end" }
             ],
             margin: "lg"
           },
@@ -324,19 +273,8 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
             type: "box",
             layout: "horizontal",
             contents: [
-              {
-                type: "text",
-                text: "กำหนดเคลียร์ภายในวันที่:",
-                size: "xs",
-                color: "#888888"
-              },
-              {
-                type: "text",
-                text: deadlineStr,
-                size: "xs",
-                color: "#888888",
-                align: "end"
-              }
+              { type: "text", text: "กำหนดเคลียร์ภายในวันที่:", size: "xs", color: "#888888" },
+              { type: "text", text: deadlineStr, size: "xs", color: "#888888", align: "end" }
             ],
             margin: "sm"
           }
@@ -349,57 +287,27 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
         paddingStart: "xl",
         paddingEnd: "xl",
         paddingBottom: "xl",
-        contents: [
-          {
-            type: "box",
-            layout: "horizontal",
-            spacing: "md",
-            contents: [
-              {
-                type: "button",
-                style: "primary",
-                color: "#267F8C",
-                height: "sm",
-                action: {
-                  type: "postback",
-                  label: "อนุมัติ",
-                  data: `action=approve&id=${data.id}&appId=${appId}`
-                }
-              },
-              {
-                type: "button",
-                style: "primary",
-                color: "#E53935",
-                height: "sm",
-                action: {
-                  type: "postback",
-                  label: "ไม่อนุมัติ",
-                  data: `action=reject&id=${data.id}&appId=${appId}`
-                }
-              }
-            ]
-          }
-        ]
+        contents: footerButtons
       }
     }
   };
 };
 
-const buildStatusFlex = (title: string, message: string, color: string = "#0F172A", icon?: string, buttonConfig?: { label: string, url: string }, withdrawal?: Withdrawal) => {
+const buildStatusFlex = (title: string, message: string, color: string = "#0F172A", icon?: string, buttons?: { label: string, url?: string, text?: string }[], withdrawal?: Withdrawal) => {
   const bodyContents: any[] = [
     {
       type: "box",
       layout: "horizontal",
       contents: [
-        { type: "text", text: icon || "", size: "lg", flex: 0 },
+        ...(icon ? [{ type: "text", text: icon, size: "lg", flex: 0 }] : []),
         {
           type: "box",
           layout: "vertical",
           contents: [
-            { type: "text", text: title, weight: "bold", size: "sm", color: color },
-            { type: "text", text: message, size: "xs", color: "#64748B", wrap: true, margin: "xs" }
+            { type: "text", text: title || "แจ้งเตือนสถานะ", weight: "bold", size: "sm", color: color },
+            { type: "text", text: message || " ", size: "xs", color: "#64748B", wrap: true, margin: "xs" }
           ],
-          margin: "md"
+          margin: icon ? "md" : "none"
         }
       ]
     }
@@ -417,14 +325,14 @@ const buildStatusFlex = (title: string, message: string, color: string = "#0F172
           type: "box",
           layout: "horizontal",
           contents: [
-            { type: "text", text: `• ${it.name}`, size: "xxs", color: "#475569", flex: 7 },
+            { type: "text", text: `• ${it.name || " "}`, size: "xxs", color: "#475569", flex: 7, wrap: true },
             { type: "text", text: `฿${(Number(it.amount)||0).toLocaleString()}`, size: "xxs", color: "#1e293b", weight: "bold", flex: 3, align: "end" }
           ]
         }))
       });
     }
 
-    if (withdrawal.bankAccount) {
+    if (withdrawal.bankAccount && (withdrawal.bankAccount.bankName || withdrawal.bankAccount.accountNumber || withdrawal.bankAccount.accountName)) {
       bodyContents.push({ type: "separator", margin: "md" });
       bodyContents.push({
         type: "box",
@@ -433,9 +341,9 @@ const buildStatusFlex = (title: string, message: string, color: string = "#0F172
         backgroundColor: "#F8FAFC",
         paddingAll: "sm",
         contents: [
-          { type: "text", text: "โอนเข้าบัญชี:", size: "xxs", color: "#94A3B8", weight: "bold" },
-          { type: "text", text: `${withdrawal.bankAccount.bankName} ${withdrawal.bankAccount.accountNumber}`, size: "xs", color: "#1E293B", weight: "bold", margin: "xs" },
-          { type: "text", text: withdrawal.bankAccount.accountName, size: "xs", color: "#475569", margin: "xs" }
+          { type: "text", text: "โอนเข้าบัญชี (Transfer to):", size: "xxs", color: "#94A3B8", weight: "bold" },
+          { type: "text", text: `${withdrawal.bankAccount.bankName || ""} ${withdrawal.bankAccount.accountNumber || ""}`.trim() || "-", size: "xs", color: "#1E293B", weight: "bold", margin: "xs" },
+          { type: "text", text: withdrawal.bankAccount.accountName || "-", size: "xs", color: "#475569", margin: "xs" }
         ]
       });
     }
@@ -452,57 +360,50 @@ const buildStatusFlex = (title: string, message: string, color: string = "#0F172
     }
   };
 
-  const footerContents: any[] = [];
+  const footerButtons: any[] = [];
   
-  if (withdrawal && withdrawal.bankAccount) {
-    footerContents.push({
+  // Auto-add copy button if bank info exists (requested for easy copying in LINE for approved items)
+  if (withdrawal?.bankAccount?.accountNumber) {
+    footerButtons.push({
       type: "button",
       style: "secondary",
       height: "sm",
-      margin: "sm",
       action: {
-        type: "clipboard",
-        label: "คัดลอกเลขบัญชี",
-        clipboardText: withdrawal.bankAccount.accountNumber.replace(/-/g, '')
-      }
-    });
-    footerContents.push({
-      type: "button",
-      style: "secondary",
-      height: "sm",
-      margin: "xs",
-      action: {
-        type: "clipboard",
-        label: "คัดลอกชื่อบัญชี",
-        clipboardText: withdrawal.bankAccount.accountName
-      }
+        type: "message",
+        label: `คัดลอกเลขบัญชี`,
+        text: withdrawal.bankAccount.accountNumber
+      },
+      margin: "sm"
     });
   }
 
-  if (buttonConfig) {
-    footerContents.push({
-      type: "button",
-      style: "primary",
-      color: color,
-      height: "sm",
-      margin: "md",
-      action: {
-        type: "uri",
-        label: buttonConfig.label,
-        uri: buttonConfig.url
-      }
+  if (buttons && buttons.length > 0) {
+    buttons.forEach(btn => {
+      footerButtons.push({
+        type: "button",
+        style: "primary",
+        color: color,
+        height: "sm",
+        action: btn.url ? {
+          type: "uri",
+          label: btn.label,
+          uri: btn.url
+        } : {
+          type: "message",
+          label: btn.label,
+          text: btn.text
+        },
+        margin: "sm"
+      });
     });
   }
 
-  if (footerContents.length > 0) {
+  if (footerButtons.length > 0) {
     contents.footer = {
       type: "box",
       layout: "vertical",
-      spacing: "xs",
-      contents: footerContents,
-      paddingStart: "lg",
-      paddingEnd: "lg",
-      paddingBottom: "lg"
+      spacing: "sm",
+      contents: footerButtons
     };
   }
 
@@ -984,37 +885,18 @@ export default function App() {
     testConnection();
 
     const initAuth = async (retries = 3) => {
-      // If already signed in, no need to do anything
-      if (auth.currentUser) return;
-
       try {
         await signInAnonymously(auth);
-      } catch (e: any) {
-        const errMsg = e.message || String(e);
-        const errCode = e.code || "";
-        
-        if (errCode === 'auth/admin-restricted-operation') {
-          console.warn("Anonymous Auth is disabled in Firebase Console.");
-          alert("ระบบยืนยันตัวตนล้มเหลว: Anonymous Authentication ถูกปิดใช้งานใน Firebase Console\n\nกรุณาไปที่ Firebase Console > Authentication > Sign-in method แล้วเปิดใช้งาน 'Anonymous' เพื่อให้แอปทำงานได้ปกติ");
-          return;
-        }
-
-        if (errCode === 'auth/too-many-requests') {
-          console.warn("Too many authentication requests. Retrying with longer delay...");
-          if (retries > 0) {
-            setTimeout(() => initAuth(retries - 1), 10000); // 10 seconds for rate limit
-          }
-          return;
-        }
-
+      } catch (e) {
         console.error(`Auth Attempt Failed (Retries left: ${retries}):`, e);
-
         if (retries > 0) {
-          const delay = (4 - retries) * 2000; // Exponential-ish backoff
-          setTimeout(() => initAuth(retries - 1), delay);
+          setTimeout(() => initAuth(retries - 1), 2000);
         } else {
+          const errMsg = (e as any).message || String(e);
           if (errMsg.includes('network-request-failed')) {
-            alert("ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต");
+            alert(" ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ Firebase ได้ (Network Error)\n\nกรุณาตรวจสอบการเชื่อมต่ออินเทอร์เน็ต หรือปิด Adblocker แล้วลองใหม่อีกครั้ง");
+          } else {
+            alert(" ระบบยืนยันตัวตนล้มเหลว: " + errMsg);
           }
         }
       }
@@ -1033,7 +915,14 @@ export default function App() {
 
     const usagePath = doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'usage');
     const unsubU = onSnapshot(usagePath, (snap) => {
-      if (snap.exists()) setAiUsage(snap.data() as any);
+      if (snap.exists()) {
+        setAiUsage(snap.data() as any);
+      } else {
+        // Initialize usage document if missing to avoid server-side 5 NOT_FOUND
+        setDoc(usagePath, { ocrCount: 0, lineCount: 0, requestCount: 0 }, { merge: true }).catch(err => {
+          console.error("Failed to initialize usage doc:", err);
+        });
+      }
     }, (error) => handleFirestoreError(error, OperationType.GET, 'system_configs/usage'));
 
     const withdrawalsPath = `artifacts/${appId}/public/data/withdrawals`;
@@ -1046,23 +935,7 @@ export default function App() {
     const unsubC = onSnapshot(collection(db, configsPath), (snap) => {
       const data: any = {};
       snap.docs.forEach(d => data[d.id] = d.data());
-      
-      if (data.passwords) {
-        setSystemConfigs(data.passwords);
-        // If webAppUrl is missing, try to auto-set it
-        if (!data.passwords.webAppUrl) {
-          updateDoc(doc(db, configsPath, 'passwords'), { webAppUrl: window.location.origin });
-        }
-      } else {
-        setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), { 
-          execPin: '888', 
-          accPin: '123', 
-          webAppUrl: window.location.origin,
-          allowedLineIds: [],
-          approvers: []
-        });
-      }
-
+      if (data.passwords) setSystemConfigs(data.passwords);
       if (data.employees && data.employees.list) setDynamicEmployees(data.employees.list);
       
       if (data.projects && data.projects.list) {
@@ -1120,17 +993,17 @@ export default function App() {
           const ref = doc(db, `artifacts/${appId}/public/data/withdrawals/${target.id}`);
           const appUrl = systemConfigs.webAppUrl || window.location.origin;
 
-          updateDoc(ref, cleanData({ 
+          updateDoc(ref, { 
             status: 'approved', 
             approvedAt: new Date().toISOString(),
             clearanceDeadline: deadline.toISOString()
-          })).then(async () => {
+          }).then(async () => {
             const flex = buildStatusFlex(
               " อนุมัติการเบิก (ผ่าน URL)", 
-              `ID: ${target.advanceId}\nพนักงาน: ${target.employeeName}\nยอด: ฿${(target.totalAmount || 0).toLocaleString()}`, 
+              `อนุมัติรายการ: ${target.advanceId}\nพนักงาน: ${target.employeeName}\nยอด: ฿${(target.totalAmount || 0).toLocaleString()}\n\nโอนเข้า: ${target.bankAccount?.bankName || "-"} ${target.bankAccount?.accountNumber || "-"}\nชื่อบัญชี: ${target.bankAccount?.accountName || "-"}`, 
               "#10B981", 
               "",
-              { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${target.id}&action=slip` },
+              [{ label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${target.id}&action=slip` }],
               target
             );
             await notifyLine("ผลการอนุมัติ (URL)", 'flex', flex);
@@ -1151,9 +1024,7 @@ export default function App() {
             window.history.replaceState({}, document.title, window.location.pathname);
           });
         } else {
-          const statusText = target.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ/ถูกปฏิเสธแล้ว';
-          const processedBy = target.approvedByName ? ` โดย ${target.approvedByName}` : '';
-          alert(`⚠️ รายการ ${target.advanceId} นี้ได้รับการ${statusText}ไปแล้ว${processedBy} ไม่สามารถดำเนินการซ้ำได้`);
+          alert(`รายการนี้ถูกดำเนินการไปแล้ว (สถานะปัจจุบัน: ${target.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'})`);
           window.history.replaceState({}, document.title, window.location.pathname);
         }
       }
@@ -1312,8 +1183,22 @@ export default function App() {
   }, [withdrawals, dashboardFilter, activeWithdrawals, dynamicProjects]);
 
   const handleRequestSubmit = async () => {
-    if (isBusy || !newReq.employeeName || newReq.projectIds.length === 0 || newReq.items.some(i => !i.amount)) return alert("ข้อมูลไม่ครบ (โปรดเลือกอย่างน้อย 1 โปรเจกต์)");
-    if (!newReq.bankAccount) return alert("กรุณาระบุหรือเลือกบัญชีธนาคารสำหรับรับเงิน");
+    // Validation
+    if (isBusy) return;
+    if (!newReq.employeeName) return alert("กรุณาระบุชื่อพนักงาน");
+    if (!newReq.projectIds || newReq.projectIds.length === 0) return alert("กรุณาเลือกโครงการอย่างน้อย 1 โครงการ");
+    if (!newReq.items || newReq.items.length === 0) return alert("กรุณาเพิ่มรายการค่าใช้จ่ายอย่างน้อย 1 รายการ");
+    
+    // Check items
+    for (const item of newReq.items) {
+      if (!item.name.trim()) return alert("กรุณากรอกชื่อรายการให้ครบถ้วน");
+      if (!item.category) return alert("กรุณาเลือกหมวดหมู่ค่าใช้จ่ายให้ครบถ้วน");
+      if (Number(item.amount || 0) <= 0) return alert("กรุณาระบุจำนวนเงินของแต่ละรายการให้ถูกต้อง");
+    }
+
+    if (!newReq.bankAccount || !newReq.bankAccount.bankName || !newReq.bankAccount.accountNumber) {
+      return alert("กรุณาระบุข้อมูลบัญชีธนาคารสำหรับรับเงินให้ครบถ้วน");
+    }
     
     setIsBusy(true);
     const path = `artifacts/${appId}/public/data/withdrawals`;
@@ -1336,7 +1221,7 @@ export default function App() {
         balance: total, 
         receipts: []
       };
-      const docRef = await addDoc(collection(db, path), cleanData(docData));
+      const docRef = await addDoc(collection(db, path), docData);
       
       const appUrl = systemConfigs.webAppUrl || window.location.origin;
       const flex = buildRequestFlex({ id: docRef.id, ...docData } as any, appUrl);
@@ -1360,7 +1245,11 @@ export default function App() {
 
       setNewReq({ employeeName: '', projectIds: [], items: [{ name: '', amount: 0, category: '', projectId: '' }], bankAccount: undefined });
       setActiveTab('history');
-    } catch (e) { handleFirestoreError(e, OperationType.CREATE, path); } finally { setIsBusy(false); }
+    } catch (e) { 
+      const msg = e instanceof Error ? e.message : String(e);
+      alert("เกิดข้อผิดพลาดในการบันทึกข้อมูล: " + msg);
+      handleFirestoreError(e, OperationType.CREATE, path); 
+    } finally { setIsBusy(false); }
   };
 
   const handleFile = async (idx: number, file: File | null) => {
@@ -1479,6 +1368,15 @@ export default function App() {
   const saveStaffTable = async () => {
     const list = staffEditList.filter(s => s.nickname.trim());
     if (list.length === 0) return alert("กรุณาระบุรายชื่ออย่างน้อย 1 รายการ");
+
+    // Validation for bank accounts
+    for (const s of list) {
+        if (s.bank || s.accountNumber || s.accountName) {
+            if (!s.bank || !s.accountNumber || !s.accountName) {
+                return alert(`พนักงาน "${s.nickname}": กรุณากรอกข้อมูลธนาคารให้ครบถ้วน (ธนาคาร, เลขบัญชี, ชื่อบัญชี)`);
+            }
+        }
+    }
     
     setIsBusy(true);
     try {
@@ -1499,7 +1397,11 @@ export default function App() {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'employees'), { list: names });
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'bank_accounts'), accounts);
       alert("บันทึกข้อมูลพนักงานและบัญชีธนาคารเรียบร้อยแล้ว!");
-    } catch (e) { handleFirestoreError(e, OperationType.WRITE, 'system_configs'); } finally { setIsBusy(false); }
+    } catch (e) { 
+      const msg = e instanceof Error ? e.message : String(e);
+      alert("ไม่สามารถบันทึกข้อมูลได้: " + msg);
+      handleFirestoreError(e, OperationType.WRITE, 'system_configs'); 
+    } finally { setIsBusy(false); }
   };
 
   const runAI = async () => {
@@ -1516,11 +1418,14 @@ export default function App() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ image: r.base64 }),
           });
-          if (!res.ok) throw new Error("AI extraction failed");
+          if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            throw new Error(errBody.error || "AI extraction failed");
+          }
           return await res.json();
         } catch (e) {
           console.error("AI Item error:", e);
-          return { name: r.name || 'Unknown Item', amount: r.amount || 0 };
+          return { name: r.name || 'Unknown Item', amount: r.amount || 0, description: r.description || '' };
         }
       }));
 
@@ -1531,9 +1436,10 @@ export default function App() {
       for (let i = 0; i < nr.length; i++) {
         if (nr[i].base64) {
           const ai = results[matchedIdx++];
-          nr[i].name = ai.name || nr[i].name;
-          nr[i].amount = ai.amount || nr[i].amount;
-          nr[i].originalAmount = ai.amount; // track original for "Edited" detection
+          nr[i].name = ai.name || nr[i].name || 'รายการสินค้า';
+          nr[i].amount = Number(ai.amount) || nr[i].amount || 0;
+          nr[i].description = ai.description || nr[i].description || '';
+          nr[i].originalAmount = Number(ai.amount) || nr[i].amount || 0;
           total += nr[i].amount;
         }
       }
@@ -1552,13 +1458,17 @@ export default function App() {
     setIsBusy(true);
     try {
       const b64 = await compressImg(file);
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedWithdrawal.id), cleanData({
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedWithdrawal.id), {
         transferSlip: b64,
         status: 'approved'
-      }));
+      });
       await notifyLine(` อัปโหลดหลักฐานการโอนเงินแล้ว\nID: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nยอด: ฿${selectedWithdrawal.totalAmount.toLocaleString()}`, 'text');
       setSelectedWithdrawal({ ...selectedWithdrawal, transferSlip: b64, status: 'approved' });
-    } catch (e) { handleFirestoreError(e, OperationType.UPDATE, 'withdrawals'); } finally { setIsBusy(false); }
+    } catch (e) { 
+      const msg = e instanceof Error ? e.message : String(e);
+      alert("เกิดข้อผิดพลาดในการบันทึกข้อมูลเคลียร์: " + msg);
+      handleFirestoreError(e, OperationType.UPDATE, 'withdrawals'); 
+    } finally { setIsBusy(false); }
   };
 
   const saveClearance = async () => {
@@ -1567,6 +1477,19 @@ export default function App() {
        alert("ไม่พบข้อมูลรายการเบิก (โปรดเลือกรายการจากรายการรอเคลียร์)");
        return;
     }
+
+    // Validation for receipts
+    if (!clrForm.receipts || clrForm.receipts.length === 0) {
+      return alert("กรุณาแนบรายการค่าใช้จ่ายอย่างน้อย 1 รายการ");
+    }
+
+    for (let i = 0; i < clrForm.receipts.length; i++) {
+      const r = clrForm.receipts[i];
+      if (!r.name.trim()) return alert(`รายการที่ ${i+1}: กรุณาระบุชื่อร้านค้าหรือรายการ`);
+      if (Number(r.amount || 0) <= 0) return alert(`รายการที่ ${i+1}: กรุณาระบุจำนวนเงินให้ถูกต้อง`);
+      if (!r.base64 && !r.driveUrl) return alert(`รายการที่ ${i+1}: กรุณาแนบรูปภาพสลิป`);
+    }
+
     setIsBusy(true);
     const path = `artifacts/${appId}/public/data/withdrawals/${selectedAdvData.id}`;
     try {
@@ -1591,25 +1514,34 @@ export default function App() {
       }
 
       const newItems = clrForm.receipts.map((r, i) => ({
-        ...r, 
-        isEdited: Number(r.amount) !== Number(r.originalAmount),
-        docStatus: 'waiting', 
+        name: r.name || 'รายการไม่มีชื่อ',
+        amount: Number(r.amount) || 0,
+        description: r.description || '',
+        projectId: r.projectId || '',
+        base64: driveUrls[i] ? '' : (r.base64 || ''),
+        driveUrl: driveUrls[i] || null,
         fileName: `${new Date().toISOString().split('T')[0]}_${selectedAdvData.advanceId}_${i}.jpg`,
-        driveUrl: driveUrls[i] || null, // Store Drive URL
-        base64: driveUrls[i] ? '' : r.base64 // Clear base64 if we have driveUrl to save space
+        docStatus: 'waiting',
+        isEdited: Number(r.amount) !== Number(r.originalAmount),
+        originalAmount: Number(r.originalAmount) || 0,
+        additionalDocs: (r.additionalDocs || []).map(ad => ({
+           base64: ad.driveUrl ? '' : (ad.base64 || ''),
+           fileName: ad.fileName || 'document.jpg',
+           driveUrl: ad.driveUrl || null
+        }))
       }));
       const newSpend = selectedAdvData.actualSpend + total;
 
       const combinedReceipts = optimizeReceipts([...(selectedAdvData.receipts || []), ...newItems]);
       
       // 2. Update Firestore
-      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedAdvData.id), cleanData({
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'withdrawals', selectedAdvData.id), {
         clearanceStatus: (selectedAdvData.totalAmount - newSpend) <= 0 ? 'cleared' : 'partial',
         actualSpend: newSpend, 
         balance: selectedAdvData.totalAmount - newSpend,
         receipts: combinedReceipts, 
         clearedAt: new Date().toISOString()
-      }));
+      });
       
       setOcrModal({ show: false, total: 0 });
       setClrForm({ advanceId: '', receipts: [{ name: '', amount: 0, base64: '', fileName: '', isProcessing: false, projectId: '', description: '', originalAmount: 0, additionalDocs: [] }] });
@@ -1679,42 +1611,28 @@ export default function App() {
 
               const deadline = new Date();
               deadline.setDate(deadline.getDate() + 30);
-              await updateDoc(ref, cleanData({ 
+              await updateDoc(ref, { 
                 status: 'approved', 
                 approvedAt: new Date().toISOString(),
                 approvedBy: approver?.lineId || 'system',
                 approvedByName: approver?.name || 'Authorized Personnel',
                 clearanceDeadline: deadline.toISOString()
-              }));
+              });
               const appUrl = systemConfigs.webAppUrl || window.location.origin;
               const flex = buildStatusFlex(
                 " อนุมัติการเบิก (โดย: " + (approver?.name || 'ผู้มีอำนาจ') + ")", 
                 `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}\nยอด: ฿${(Number(parent.totalAmount) || 0).toLocaleString()}`, 
                 "#10B981", 
                 "",
-                { label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${parent.id}&action=slip` },
+                [{ label: "แนบสลิปโอนเงิน", url: `${appUrl}?view=${parent.id}&action=slip` }],
                 parent
               );
               notifyLine("ผลการอนุมัติ โดย " + (approver?.name || 'ผู้มีอำนาจ'), 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
               successCount++;
             } else if (showPassModal.action === 'reject') {
               if (!parent) return;
-              if (parent.status === 'rejected') return;
-
-              await updateDoc(ref, cleanData({ 
-                status: 'rejected',
-                approvedBy: approver?.lineId || 'system',
-                approvedByName: approver?.name || 'Authorized Personnel',
-                rejectedAt: new Date().toISOString()
-              }));
-              const flex = buildStatusFlex(
-                " ปฏิเสธการเบิก (โดย: " + (approver?.name || 'ผู้มีอำนาจ') + ")", 
-                `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}`, 
-                "#EF4444", 
-                "",
-                undefined,
-                parent
-              );
+              await updateDoc(ref, { status: 'rejected' });
+              const flex = buildStatusFlex(" ปฏิเสธการเบิก", `ID: ${parent.advanceId}\nพนักงาน: ${parent.employeeName}`, "#EF4444", "");
               notifyLine("ผลการปฏิเสธ", 'flex', flex).catch(err => console.warn("LINE Notify failed:", err));
               successCount++;
             } else if (showPassModal.action === 'withdraw_delete') {
@@ -1855,7 +1773,7 @@ export default function App() {
     if (!selectedWithdrawal || !selectedWithdrawal.id) return;
     try {
       const ref = doc(db, `artifacts/${appId}/public/data/withdrawals/${selectedWithdrawal.id}`);
-      await updateDoc(ref, cleanData({ clearanceDeadline: dateStr }));
+      await updateDoc(ref, { clearanceDeadline: dateStr });
       setSelectedWithdrawal({ ...selectedWithdrawal, clearanceDeadline: dateStr });
       const flex = buildStatusFlex(" เลื่อนกำหนดเคลียร์", `ADV: ${selectedWithdrawal.advanceId}\nพนักงาน: ${selectedWithdrawal.employeeName}\nกำหนดใหม่: ${new Date(dateStr).toLocaleDateString('th-TH')}`, "#F59E0B", "");
       notifyLine("เลื่อนวันครบกำหนด", 'flex', flex);
@@ -1919,6 +1837,10 @@ export default function App() {
 
   const updatePasswords = async () => {
     if (isBusy) return;
+    
+    if (!systemConfigs.execPin || systemConfigs.execPin.length < 4) return alert("กรุณาระบุรหัสผ่าน Approver (อย่างน้อย 4 ตัวอักษร)");
+    if (!systemConfigs.accPin || systemConfigs.accPin.length < 4) return alert("กรุณาระบุรหัสผ่าน Accountant (อย่างน้อย 4 ตัวอักษร)");
+
     setIsBusy(true);
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), systemConfigs);
@@ -3205,22 +3127,26 @@ export default function App() {
                           onChange={e => setNewApproverName(e.target.value)}
                         />
                         <button 
-                          onClick={async () => {
-                            if (newLineId.trim() && newApproverName.trim()) {
+                          onClick={() => {
+                            const trimmedId = newLineId.trim();
+                            const trimmedName = newApproverName.trim();
+                            
+                            if (trimmedId && trimmedName) {
+                              // Validation: LINE User ID must start with 'u' or 'U'
+                              if (!trimmedId.toLowerCase().startsWith('u')) {
+                                alert("LINE User ID ต้องเริ่มต้นด้วยตัว 'u' (เช่น Uxxxxxxxx...)");
+                                return;
+                              }
+                              
                               const current = systemConfigs.approvers || [];
-                              if (!current.some(a => a.lineId === newLineId.trim())) {
-                                const newConfigs = {
+                              if (!current.some(a => a.lineId === trimmedId)) {
+                                const updatedConfigs = {
                                   ...systemConfigs, 
-                                  approvers: [...current, { lineId: newLineId.trim(), name: newApproverName.trim() }]
+                                  approvers: [...current, { lineId: trimmedId, name: trimmedName }]
                                 };
-                                setSystemConfigs(newConfigs);
+                                setSystemConfigs(updatedConfigs);
                                 setNewLineId('');
                                 setNewApproverName('');
-                                try {
-                                  await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), newConfigs);
-                                } catch (e) {
-                                  console.error(e);
-                                }
                               } else {
                                 alert("ID นี้มีอยู่ในรายชื่อแล้ว");
                               }
@@ -3243,18 +3169,10 @@ export default function App() {
                           <span className="text-[8px] font-bold font-mono text-slate-400">{appr.lineId.slice(0, 8)}...{appr.lineId.slice(-4)}</span>
                         </div>
                         <button 
-                          onClick={async () => {
-                            const newConfigs = {
-                              ...systemConfigs, 
-                              approvers: (systemConfigs.approvers || []).filter(a => a.lineId !== appr.lineId)
-                            };
-                            setSystemConfigs(newConfigs);
-                            try {
-                              await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'system_configs', 'passwords'), newConfigs);
-                            } catch(e) {
-                              console.error(e);
-                            }
-                          }}
+                          onClick={() => setSystemConfigs({
+                            ...systemConfigs, 
+                            approvers: (systemConfigs.approvers || []).filter(a => a.lineId !== appr.lineId)
+                          })}
                           className="w-8 h-8 bg-rose-50 text-rose-500 rounded-xl flex items-center justify-center transition-all hover:bg-rose-500 hover:text-white"
                         ><X className="w-4 h-4" /></button>
                       </div>
@@ -3285,6 +3203,21 @@ export default function App() {
                       </div>
                     )}
                   </div>
+                  
+                  {/* Save Button for Approvers */}
+                  {(systemConfigs.approvers || []).length > 0 && (
+                    <div className="pt-2">
+                       <button 
+                        onClick={updatePasswords}
+                        disabled={isBusy}
+                        className="w-full bg-blue-600 text-white py-3.5 rounded-2xl font-black text-[10px] uppercase tracking-widest shadow-xl flex items-center justify-center gap-2 active:scale-95 transition-all disabled:opacity-50"
+                       >
+                         {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                         บันทึกรายชื่อผู้อนุมัติ
+                       </button>
+                       <p className="text-[8px] text-center text-slate-400 font-bold uppercase mt-2 tracking-tighter">* ข้อมูลจะถูกจัดเก็บถาวรจนกว่าจะมีการกดลบและบันทึกใหม่</p>
+                    </div>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
