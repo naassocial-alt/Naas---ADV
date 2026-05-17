@@ -134,9 +134,9 @@ const buildRequestFlex = (data: Withdrawal, appBaseUrl: string) => {
     color: "#E53935",
     height: "sm",
     action: {
-      type: "postback",
+      type: "uri",
       label: "ไม่อนุมัติ",
-      data: `action=reject&id=${data.id}&appId=${appId}`
+      uri: `${appUrl}?reject=${data.id}`
     }
   });
 
@@ -964,6 +964,7 @@ export default function App() {
     if (!fbUserReady || withdrawals.length === 0) return;
     const params = new URLSearchParams(window.location.search);
     const approveId = params.get('approve');
+    const rejectId = params.get('reject');
     const viewId = params.get('view');
     const action = params.get('action');
 
@@ -1020,6 +1021,36 @@ export default function App() {
               });
             }
             alert(`อนุมัติรายการ ${target.advanceId} เรียบร้อยแล้ว`);
+            // Clean URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+          });
+        } else {
+          alert(`รายการนี้ถูกดำเนินการไปแล้ว (สถานะปัจจุบัน: ${target.status === 'approved' ? 'อนุมัติแล้ว' : 'ไม่อนุมัติ'})`);
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }
+    }
+
+    if (rejectId && withdrawals.length > 0) {
+      const target = withdrawals.find(w => w.id === rejectId);
+      if (target) {
+        if (target.status === 'pending') {
+          const ref = doc(db, `artifacts/${appId}/public/data/withdrawals/${target.id}`);
+          updateDoc(ref, { status: 'rejected' }).then(async () => {
+            const flex = buildStatusFlex(" ปฏิเสธการเบิก (ผ่าน URL)", `ID: ${target.advanceId}\nพนักงาน: ${target.employeeName}`, "#EF4444", "");
+            await notifyLine("ผลการปฏิเสธ (URL)", 'flex', flex);
+            
+            if (systemConfigs.sheetsUrl) {
+              await syncToSheets(systemConfigs.sheetsUrl, {
+                action: 'reject_withdrawal',
+                data: {
+                  advanceId: target.advanceId,
+                  status: 'Rejected',
+                  rejectedAt: new Date().toISOString()
+                }
+              });
+            }
+            alert(`ปฏิเสธรายการ ${target.advanceId} เรียบร้อยแล้ว`);
             // Clean URL
             window.history.replaceState({}, document.title, window.location.pathname);
           });
@@ -1228,21 +1259,26 @@ export default function App() {
       await notifyLine(`รายการใหม่ [${docData.employeeName}]: ${id}`, 'flex', flex);
 
       if (systemConfigs.sheetsUrl) {
-        await syncToSheets(systemConfigs.sheetsUrl, {
-          action: 'submit_withdrawal',
-          data: {
-            id: docRef.id,
-            advanceId: id,
-            employee: docData.employeeName,
-            amount: total,
-            projects: docData.projectIds.join(', '),
-            items: docData.items.map(i => `${i.name} (${i.amount})`).join(' | '),
-            createdAt: docData.createdAt,
-            bankDetails: `${docData.bankAccount.bankName} ${docData.bankAccount.accountNumber} (${docData.bankAccount.accountName})`
-          }
-        });
+        try {
+          await syncToSheets(systemConfigs.sheetsUrl, {
+            action: 'submit_withdrawal',
+            data: {
+              id: docRef.id,
+              advanceId: id,
+              employee: docData.employeeName,
+              amount: total,
+              projects: docData.projectIds.join(', '),
+              items: docData.items.map(i => `${i.name} (${i.amount})`).join(' | '),
+              createdAt: docData.createdAt,
+              bankDetails: `${docData.bankAccount.bankName} ${docData.bankAccount.accountNumber} (${docData.bankAccount.accountName})`
+            }
+          });
+        } catch (sheetErr) {
+          console.error("Sheets sync failed at submission:", sheetErr);
+        }
       }
 
+      alert("🎉 ส่งคำขอเบิกเงินเรียบร้อยแล้ว!");
       setNewReq({ employeeName: '', projectIds: [], items: [{ name: '', amount: 0, category: '', projectId: '' }], bankAccount: undefined });
       setActiveTab('history');
     } catch (e) { 
@@ -1548,7 +1584,21 @@ export default function App() {
       setActiveTab('history');
       
       const spendingDetail = clrForm.receipts.map(r => `• ${r.name}${r.projectId ? ' [' + r.projectId + ']' : ''}: ฿${(Number(r.amount)||0).toLocaleString()}`).join('\n');
-      const flex = buildStatusFlex("✅ เคลียร์ยอดแล้ว", `ADV: ${selectedAdvData.advanceId}\nพนักงาน: ${selectedAdvData.employeeName}\nยอดเคลียร์: ฿${total.toLocaleString()}\n\nรายการ:\n${spendingDetail}`, "#10B981", "💰");
+      const balanceRemaining = selectedAdvData.totalAmount - newSpend;
+      const flexContent = [
+        `ADV: ${selectedAdvData.advanceId}`,
+        `พนักงาน: ${selectedAdvData.employeeName}`,
+        `------------------------------`,
+        `💰 ยอดเบิกทั้งหมด: ฿${selectedAdvData.totalAmount.toLocaleString()}`,
+        `📑 เคลียร์ครั้งนี้: ฿${total.toLocaleString()}`,
+        `📈 สะสมที่เคลียร์แล้ว: ฿${newSpend.toLocaleString()}`,
+        `📉 คงเหลือที่ต้องเคลียร์: ฿${(balanceRemaining > 0 ? balanceRemaining : 0).toLocaleString()}`,
+        `------------------------------`,
+        `รายการรายละเอียด:`,
+        spendingDetail
+      ].join('\n');
+
+      const flex = buildStatusFlex("✅ เคลียร์ยอดแล้ว", flexContent, "#10B981", "💰");
       notifyLine("รายการเคลียร์ยอดใหม่", 'flex', flex);
       
       // 3. Sync to Sheets
@@ -1918,7 +1968,7 @@ export default function App() {
                   const accounts = employeeBankAccounts[emp] || [];
                   setNewReq({...newReq, employeeName: emp, bankAccount: accounts.find(a => a.isDefault) || accounts[0] });
                 }}>
-                  <option value="">-- พนักงานผู้ขอเบิก --</option>{dynamicEmployees.map(e => <option key={e} value={e}>{e}</option>)}
+                  <option value="">-- พนักงานผู้ขอเบิก * --</option>{dynamicEmployees.map(e => <option key={e} value={e}>{e}</option>)}
                 </select>
 
                 {newReq.employeeName && (
@@ -2038,10 +2088,10 @@ export default function App() {
                   {newReq.items.map((it, idx) => (
                     <div key={idx} className="bg-slate-50 p-3 rounded-xl border space-y-2 relative animate-in slide-in-from-right-2">
                       <div className="grid grid-cols-1 gap-2">
-                        <select className="bg-white border rounded-lg px-2 py-1.5 text-[10px] font-bold outline-none ring-blue-500/10 focus:ring-2" value={it.category} onChange={e => { const ni = [...newReq.items]; ni[idx].category = e.target.value; setNewReq({...newReq, items: ni}); }}><option value="">-- หมวดหมู่ค่าใช้จ่าย --</option>{dynamicCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
+                        <select className="bg-white border rounded-lg px-2 py-1.5 text-[10px] font-bold outline-none ring-blue-500/10 focus:ring-2" value={it.category} onChange={e => { const ni = [...newReq.items]; ni[idx].category = e.target.value; setNewReq({...newReq, items: ni}); }}><option value="">-- หมวดหมู่ * --</option>{dynamicCategories.map(c => <option key={c} value={c}>{c}</option>)}</select>
                       </div>
                       <div className="flex gap-2">
-                        <input className="flex-1 bg-white border rounded-lg px-3 py-1.5 text-[11px] font-bold outline-none ring-blue-500/10 focus:ring-2" placeholder="ระบุรายการ..." value={it.name} onChange={e => { const ni = [...newReq.items]; ni[idx].name = e.target.value; setNewReq({...newReq, items: ni}); }} />
+                        <input className="flex-1 bg-white border rounded-lg px-3 py-1.5 text-[11px] font-bold outline-none ring-blue-500/10 focus:ring-2" placeholder="ระบุรายการ... *" value={it.name} onChange={e => { const ni = [...newReq.items]; ni[idx].name = e.target.value; setNewReq({...newReq, items: ni}); }} />
                         <div className="relative">
                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-300 text-[10px]">฿</span>
                            <input type="number" className="w-24 bg-white border rounded-lg pl-5 pr-2 py-1.5 text-xs font-black text-right outline-none ring-blue-500/10 focus:ring-2" value={it.amount || ''} onChange={e => { const ni = [...newReq.items]; ni[idx].amount = Number(e.target.value); setNewReq({...newReq, items: ni}); }} />
@@ -2055,7 +2105,10 @@ export default function App() {
                     setNewReq({...newReq, items: [...newReq.items, {name:'', amount:0, category: '', projectId: lastProj}]});
                   }} className="w-full py-2 text-blue-600 font-black text-[9px] uppercase border border-dashed border-blue-200 rounded-xl hover:bg-blue-50 transition-colors">+ เพิ่มรายการ</button>
                 </div>
-                <button onClick={handleRequestSubmit} disabled={isBusy} className="w-full bg-[#0F172A] text-white py-3 rounded-xl font-black shadow-lg uppercase text-xs active:scale-95 transition-all">ส่งคำขอเบิกเงิน</button>
+                <button onClick={handleRequestSubmit} disabled={isBusy} className="w-full bg-[#0F172A] text-white py-3 rounded-xl font-black shadow-lg uppercase text-xs active:scale-95 transition-all flex items-center justify-center gap-2">
+                  {isBusy && <Loader2 className="w-3 h-3 animate-spin" />}
+                  {isBusy ? 'กำลังส่งข้อมูล...' : 'ส่งคำขอเบิกเงิน (Submit)'}
+                </button>
               </div>
             </div>
           </div>
@@ -3381,7 +3434,10 @@ export default function App() {
                <span className="font-black text-slate-400 uppercase text-xs">Total Items Spend</span>
                <span className="text-3xl font-black tracking-tighter">฿{clrForm.receipts.reduce((s, x) => s + Number(x.amount || 0), 0).toLocaleString()}</span>
              </div>
-             <button onClick={saveClearance} className="w-full bg-[#0F172A] text-white py-5 rounded-[2rem] font-black text-sm uppercase tracking-widest shadow-2xl active:scale-95 transition-all">บันทึกยอดเคลียร์</button>
+             <button onClick={saveClearance} disabled={isBusy} className="w-full bg-[#0F172A] text-white py-5 rounded-[2rem] font-black text-sm uppercase tracking-widest shadow-2xl active:scale-95 transition-all flex items-center justify-center gap-2">
+               {isBusy && <Loader2 className="w-4 h-4 animate-spin text-white" />}
+               {isBusy ? 'กำลังบันทึกข้อมูล...' : 'บันทึกยอดเคลียร์ (Save Settlement)'}
+             </button>
              <button onClick={() => setOcrModal({ show: false, total: 0 })} className="w-full mt-2 text-slate-400 font-bold text-[10px] uppercase">ยกเลิกแล้วแก้ไข</button>
            </div>
         </div>

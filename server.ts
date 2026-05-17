@@ -661,9 +661,9 @@ async function startServer() {
                     color: "#E53935",
                     height: "sm",
                     action: {
-                      type: "postback",
+                      type: "uri",
                       label: "ไม่อนุมัติ",
-                      data: `action=reject&id=${data.id}&appId=${appId}`
+                      uri: `${webAppUrl}?reject=${data.id}`
                     }
                   }
                 ]
@@ -809,15 +809,21 @@ async function startServer() {
       }
 
       if (event.type === "postback") {
+        console.log(`[LINE Webhook] Postback data: ${event.postback.data}`);
+        const replyToken = event.replyToken;
+        const userId = event.source.userId;
         try {
           const params = new URLSearchParams(event.postback.data);
           const action = params.get("action");
           const withdrawId = params.get("id");
           const appIdFromParams = params.get("appId");
-          const replyToken = event.replyToken;
-          const userId = event.source.userId;
           
-          if (!firestore) continue;
+          console.log(`[LINE Webhook] Action: ${action}, ID: ${withdrawId}, User: ${userId}`);
+
+          if (!firestore) {
+            console.error("[LINE Webhook] Firestore not initialized");
+            continue;
+          }
 
           const appId = appIdFromParams || process.env.APP_ID || "advance-system-v3";
           const configsRef = firestore.doc(`artifacts/${appId}/public/data/system_configs/passwords`);
@@ -826,11 +832,14 @@ async function startServer() {
           const allowedLineIds = configs.allowedLineIds || [];
           const approvers = configs.approvers || [];
 
+          console.log(`[LINE Webhook] Found ${approvers.length} approvers and ${allowedLineIds.length} legacy IDs`);
+
           if ((allowedLineIds.length > 0 || approvers.length > 0) && userId) {
             const isLegacyAuth = allowedLineIds.includes(userId);
             const isApproverAuth = approvers.some((a: any) => a.lineId === userId);
             
             if (!isLegacyAuth && !isApproverAuth) {
+              console.warn(`[LINE Webhook] Unauthorized access attempt by ${userId}`);
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: "🔒 คุณไม่มีสิทธิ์สั่งการผ่านเมนูนี้" }]);
               continue;
             }
@@ -842,11 +851,13 @@ async function startServer() {
             const snap = await docRef.get();
 
             if (!snap.exists) {
+              console.error(`[LINE Webhook] Document not found at path: ${docPath}`);
               if (replyToken) await replyMessage(replyToken, [{ type: "text", text: `❌ ไม่พบรายการ: ${withdrawId}` }]);
               continue;
             }
 
             const data = snap.data();
+            console.log(`[LINE Webhook] Handling action "${action}" for advanceId "${data?.advanceId}"`);
             if (data?.status !== "pending") {
               if (replyToken) {
                 const flex = createResultFlex("แจ้งเตือนสถานะ", "#F59E0B", data, `รายการนี้ถูกดำเนินการไปแล้ว (${data?.status})`);
@@ -935,6 +946,13 @@ async function startServer() {
           }
         } catch (err) {
           console.error("Webhook processing error:", err);
+          if (replyToken) {
+            try {
+              await replyMessage(replyToken, [{ type: "text", text: `❌ เกิดข้อผิดพลาดในการประมวลผล: ${(err as Error).message}` }]);
+            } catch (replyErr) {
+              console.error("Failed to send error reply:", replyErr);
+            }
+          }
         }
       }
     }
